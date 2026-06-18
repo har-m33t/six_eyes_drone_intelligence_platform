@@ -4,13 +4,22 @@ the DualSinkSender, and launches the six producer threads.
 Run with:  python -m src.main   (or python src/main.py)
 """
 import asyncio
+import os
+import sys
 import threading
 import time
 
-from . import config
-from .producer import launch_producers
-from .transport.foundry_client import DualSinkSender
-from .transport.websocket_server import serve_forever
+# Support both invocations the docs advertise: `python -m src.main` (package
+# context already set) and `python src/main.py` (run as a loose script, which
+# has no package context). Putting the project root on sys.path and importing
+# via the absolute `src` package makes the latter work too — without it the
+# relative `from . import config` raises ImportError.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src import config
+from src.producer import launch_producers
+from src.transport.foundry_client import DualSinkSender
+from src.transport.websocket_server import serve_forever
 
 
 def _run_ws_loop(loop):
