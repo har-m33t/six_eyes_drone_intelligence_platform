@@ -47,9 +47,19 @@ class DualSinkSender:
         )
 
     def send(self, packet):
-        # PRIMARY — WebSocket broadcast onto the running asyncio loop.
-        asyncio.run_coroutine_threadsafe(broadcast(packet), self.ws_loop)
+        # PRIMARY — WebSocket broadcast onto the running asyncio loop. Keep the
+        # Future and log any exception, so failures on the critical primary sink
+        # aren't silently swallowed.
+        future = asyncio.run_coroutine_threadsafe(broadcast(packet), self.ws_loop)
+        future.add_done_callback(_log_broadcast_error)
 
         # SECONDARY — Foundry, async and best-effort.
         if self.foundry_enabled:
             push_to_foundry(packet)
+
+
+def _log_broadcast_error(future):
+    try:
+        future.result()
+    except Exception as e:  # noqa: BLE001 — diagnostic only, must not raise
+        print(f"[WS] Broadcast failed: {e}")
