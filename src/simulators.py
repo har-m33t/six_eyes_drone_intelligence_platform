@@ -20,7 +20,7 @@ def simulate_gps(drone_id: str) -> dict:
 
 def simulate_health(drone_id: str, frame_idx: int) -> dict:
     elapsed = time.time() - config.MISSION_START
-    battery = max(0, round(100 - (elapsed / 60) * 5 + random.uniform(-1, 1), 1))
+    battery = max(0, min(100, round(100 - (elapsed / 60) * 5 + random.uniform(-1, 1), 1)))
 
     if battery < 10:
         signal = "LOST"
