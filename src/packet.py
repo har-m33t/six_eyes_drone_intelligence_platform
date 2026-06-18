@@ -19,9 +19,11 @@ class DronePacket:
     gps: dict                # {lat, lon, alt}
     health: dict             # {battery, signal, status, speed_ms, temp_c}
     mission: dict = field(default_factory=dict)  # {zone, coverage_pct, elapsed_s}
+    frame_b64: str = None     # base64 JPEG of the frame (dashboard video); WS-only
 
 
-def build_packet(drone_id: str, frame_idx: int, detections: list) -> DronePacket:
+def build_packet(drone_id: str, frame_idx: int, detections: list,
+                 frame_b64: str = None) -> DronePacket:
     elapsed = time.time() - config.MISSION_START
     return DronePacket(
         drone_id=drone_id,
@@ -35,4 +37,5 @@ def build_packet(drone_id: str, frame_idx: int, detections: list) -> DronePacket
             "coverage_pct": min(100, round(elapsed / 120 * 100, 1)),
             "elapsed_s": round(elapsed, 1),
         },
+        frame_b64=frame_b64,
     )

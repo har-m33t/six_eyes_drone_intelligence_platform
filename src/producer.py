@@ -1,6 +1,7 @@
 """Producer threads: one daemon thread per drone. Each loops its MP4 at
 real-time FPS, runs YOLO detection, builds a packet, and hands it to the sender.
 """
+import base64
 import threading
 import time
 
@@ -12,6 +13,28 @@ from .packet import build_packet
 
 # Per-drone stop flags — set the Event to kill a drone (e.g. demo signal-lost).
 stop_events = {drone_id: threading.Event() for drone_id in config.DRONE_IDS}
+
+
+def encode_frame_b64(frame, width=None, quality=None):
+    """Downscale and JPEG-encode a frame to a base64 string for packet.frame_b64.
+
+    Returns None when streaming is disabled (width 0) or encoding fails, so the
+    dashboard cleanly falls back to its NO-SIGNAL placeholder.
+    """
+    width = config.VIDEO_STREAM_WIDTH if width is None else width
+    quality = config.VIDEO_JPEG_QUALITY if quality is None else quality
+    if not width:
+        return None
+
+    h, w = frame.shape[:2]
+    if w > width:
+        scaled_h = max(1, round(h * width / w))
+        frame = cv2.resize(frame, (width, scaled_h), interpolation=cv2.INTER_AREA)
+
+    ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        return None
+    return base64.b64encode(buf).decode("ascii")
 
 
 def drone_producer(drone_id, video_path, sender, start_offset=0):
@@ -33,7 +56,8 @@ def drone_producer(drone_id, video_path, sender, start_offset=0):
             continue
 
         detections = run_detection(model, frame)
-        packet = build_packet(drone_id, frame_idx, detections)
+        frame_b64 = encode_frame_b64(frame)
+        packet = build_packet(drone_id, frame_idx, detections, frame_b64=frame_b64)
         sender.send(packet)
 
         frame_idx += 1

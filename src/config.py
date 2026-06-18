@@ -62,6 +62,15 @@ DRONE_PATTERNS = {
 YOLO_MODEL = os.getenv("YOLO_MODEL", "yolov8n.pt")
 PERSON_CLASS_ID = 0  # COCO class 0 = person
 
+# --- Video streaming --------------------------------------------------------
+# Each frame is downscaled and JPEG-encoded to base64 (packet.frame_b64) for the
+# dashboard video grid. Frames are kept small so the primary WebSocket path stays
+# under its <100ms latency budget with six feeds in flight; the dashboard tiles
+# are small (2x3 grid, object-fit: cover) so full resolution is wasted bytes.
+# Set VIDEO_STREAM_WIDTH=0 to disable encoding (telemetry-only, no live video).
+VIDEO_STREAM_WIDTH = int(os.getenv("VIDEO_STREAM_WIDTH", "640"))
+VIDEO_JPEG_QUALITY = int(os.getenv("VIDEO_JPEG_QUALITY", "70"))
+
 # --- Transport (WebSocket primary) ------------------------------------------
 WS_HOST = os.getenv("WS_HOST", "localhost")
 WS_PORT = int(os.getenv("WS_PORT", "8765"))

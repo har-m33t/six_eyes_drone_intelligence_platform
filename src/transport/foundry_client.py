@@ -18,13 +18,17 @@ def push_to_foundry(packet):
     """Fire-and-forget — runs in a background thread, never blocks the caller."""
     def _push():
         try:
+            # Drop the base64 video frame: it's for the dashboard (WebSocket)
+            # only. The telemetry dataset (README §4.4) has no video column, and
+            # shipping frames over this REST POST would bloat it pointlessly.
+            payload = {k: v for k, v in asdict(packet).items() if k != "frame_b64"}
             requests.post(
                 f"{config.FOUNDRY_URL}/api/v1/datasets/{config.DATASET_RID}/transactions",
                 headers={
                     "Authorization": f"Bearer {config.FOUNDRY_TOKEN}",
                     "Content-Type": "application/json",
                 },
-                json=asdict(packet),
+                json=payload,
                 timeout=5,
             )
         except Exception as e:  # noqa: BLE001 — secondary sink must not crash producer
