@@ -18,8 +18,11 @@ Once implemented per the spec:
 pip install -r requirements.txt        # opencv-python, ultralytics, websockets, requests, numpy, python-dotenv
 python src/main.py                     # launches 6 producer threads + WebSocket server (entry point)
 
-python -m pytest tests/                # run all tests
-python -m pytest tests/test_inference.py    # run a single test file
+# pytest must run with plugin autoload disabled — a global ROS2 / Python 3.8 install on
+# PYTHONPATH injects broken pytest plugins that crash collection (see pytest.ini).
+# PowerShell:  $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD=1; python -m pytest tests/
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/                     # run all tests
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_inference.py    # run a single test file
 python tests/ws_client_test.py         # manual WS client: connect to ws://localhost:8765 and print packets
 ```
 
