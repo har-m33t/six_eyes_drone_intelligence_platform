@@ -373,7 +373,6 @@ const WS_URL = "ws://localhost:8765";
 
 const droneState = {};
 let missionStart = null;
-let totalDetections = 0;
 let alertCount = 0;
 const seenAlerts = new Set();
 
@@ -650,7 +649,6 @@ function handlePacket(pkt) {
   const badge = document.getElementById(`badge-${id}`);
   if (pkt.detections && pkt.detections.length > 0) {
     badge.classList.add('active');
-    totalDetections += pkt.detections.length;
   } else {
     badge.classList.remove('active');
   }
@@ -708,9 +706,13 @@ function refreshSummary() {
   const online = drones.filter(d => d.health.status !== 'CRITICAL' && d.health.signal !== 'LOST').length;
   const avgBatt = drones.length ? (drones.reduce((s,d) => s + d.health.battery, 0) / drones.length) : 0;
 
+  // Currently-active detections: sum across the latest packet per drone, not a
+  // per-frame running total (which climbed into the thousands within seconds).
+  const activeDetections = drones.reduce((s,d) => s + (d.detections?.length || 0), 0);
+
   document.getElementById('feedCount').textContent = `${online}/6 ONLINE`;
   document.getElementById('statOnline').textContent = `${online}/6`;
-  document.getElementById('statDetections').textContent = totalDetections;
+  document.getElementById('statDetections').textContent = activeDetections;
   document.getElementById('statBattery').textContent = drones.length ? `${avgBatt.toFixed(0)}%` : '--';
   document.getElementById('statAlerts').textContent = alertCount;
 
