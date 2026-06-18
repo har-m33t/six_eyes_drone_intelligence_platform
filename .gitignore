@@ -27,6 +27,7 @@ dist/
 
 # Footage (large binaries) and model weights — not committed
 footage/*.mp4
+footage_raw/
 *.pt
 *.onnx
 
