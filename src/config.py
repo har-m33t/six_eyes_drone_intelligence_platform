@@ -25,16 +25,24 @@ ZONES = {
 VIDEO_PATHS = {
     "DRONE_1": "footage/drone_1.mp4",
     "DRONE_2": "footage/drone_2.mp4",
-    "DRONE_3": "footage/drone_3.mp4",
-    "DRONE_4": "footage/drone_4.mp4",
-    "DRONE_5": "footage/drone_5.mp4",
-    "DRONE_6": "footage/drone_6.mp4",
+    "DRONE_3": "footage/drone_1.mp4",  # reused, desynced via START_OFFSETS
+    "DRONE_4": "footage/drone_2.mp4",  # reused, desynced via START_OFFSETS
+    "DRONE_5": "footage/drone_3.mp4",
+    "DRONE_6": "footage/drone_2.mp4",  # reused, desynced via START_OFFSETS
 }
 
 # Per-drone video start frame — makes the six feeds look genuinely independent.
+# Each offset must stay below the frame count of that drone's assigned clip, and
+# drones sharing a clip must use distinct offsets, or the desync is lost (the
+# producer seeks past EOF, gets no frame, and loops back to 0 — see test_footage).
+# Current clips: drone_1.mp4=460f, drone_2.mp4=298f, drone_3.mp4=552f.
 START_OFFSETS = {
-    "DRONE_1": 0,   "DRONE_2": 150, "DRONE_3": 300,
-    "DRONE_4": 450, "DRONE_5": 600, "DRONE_6": 720,
+    "DRONE_1": 0,    # drone_1.mp4 (460f)
+    "DRONE_2": 60,   # drone_2.mp4 (298f)
+    "DRONE_3": 230,  # drone_1.mp4 — desynced from DRONE_1
+    "DRONE_4": 140,  # drone_2.mp4 — desynced from DRONE_2/DRONE_6
+    "DRONE_5": 250,  # drone_3.mp4 (552f)
+    "DRONE_6": 220,  # drone_2.mp4 — desynced from DRONE_2/DRONE_4
 }
 
 # --- GPS simulation ---------------------------------------------------------
