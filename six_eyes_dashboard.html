@@ -381,7 +381,7 @@ const seenAlerts = new Set();
 const videoGrid = document.getElementById('videoGrid');
 DRONE_IDS.forEach(id => {
   const feed = document.createElement('div');
-  feed.className = 'feed offline';
+  feed.className = 'feed';
   feed.id = `feed-${id}`;
   feed.innerHTML = `
     <div class="feed-placeholder"><div class="pulse"></div>NO SIGNAL</div>
@@ -645,7 +645,6 @@ function handlePacket(pkt) {
     imgEl.src = `data:image/jpeg;base64,${pkt.frame_b64}`;
     imgEl.style.display = 'block';
     feedEl.querySelector('.feed-placeholder').style.display = 'none';
-    feedEl.classList.remove('offline');
   }
 
   const badge = document.getElementById(`badge-${id}`);
@@ -656,9 +655,10 @@ function handlePacket(pkt) {
     badge.classList.remove('active');
   }
 
-  if (pkt.health.signal === 'LOST') {
-    feedEl.classList.add('offline');
-  }
+  // Signal-lost overlay tracks actual signal state, not frame arrival, so a
+  // healthy feed that simply hasn't sent video yet stays on the neutral
+  // "NO SIGNAL" placeholder rather than the red SIGNAL LOST critical overlay.
+  feedEl.classList.toggle('offline', pkt.health.signal === 'LOST');
 
   // map trail
   if (pkt.gps) {
