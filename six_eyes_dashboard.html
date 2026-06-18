@@ -5,17 +5,22 @@
 <title>SIX-EYES // Mission Intelligence</title>
 <style>
   :root {
-    --bg-void: #0a0d0a;
-    --bg-panel: #10140f;
-    --bg-panel-raised: #161b15;
-    --line: #2a3527;
-    --line-bright: #3d4d38;
-    --phosphor: #6fff8f;
-    --phosphor-dim: #3a8a4e;
+    /* Structural — black/void base */
+    --bg-void: #08070c;
+    --bg-panel: #0e0c16;
+    --bg-panel-raised: #15121f;
+    --line: #251f33;
+    --line-bright: #3a3150;
+    /* Primary accent — purple, replaces the old phosphor-green */
+    --accent: #a78bfa;
+    --accent-dim: #6d5bb8;
+    --accent-glow: rgba(167, 139, 250, 0.35);
+    /* Severity system — colors unchanged */
     --amber: #ffb84d;
     --red: #ff5c5c;
-    --text-primary: #d8ead0;
-    --text-dim: #6b7a64;
+    /* Text — slight purple tint, not pure white */
+    --text-primary: #e4ddf7;
+    --text-dim: #756f8c;
     --mono: 'JetBrains Mono', 'Courier New', monospace;
   }
 
@@ -29,8 +34,8 @@
     height: 100vh;
     overflow: hidden;
     background-image:
-      linear-gradient(rgba(111,255,143,0.02) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(111,255,143,0.02) 1px, transparent 1px);
+      linear-gradient(rgba(167,139,250,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(167,139,250,0.025) 1px, transparent 1px);
     background-size: 24px 24px;
   }
 
@@ -49,8 +54,8 @@
     font-weight: 700;
     font-size: 15px;
     letter-spacing: 0.12em;
-    color: var(--phosphor);
-    text-shadow: 0 0 8px rgba(111,255,143,0.4);
+    color: var(--accent);
+    text-shadow: 0 0 8px var(--accent-glow);
   }
   .logo span { color: var(--text-dim); font-weight: 400; }
 
@@ -63,7 +68,7 @@
     background: var(--red);
     box-shadow: 0 0 6px var(--red);
   }
-  .conn-dot.live { background: var(--phosphor); box-shadow: 0 0 8px var(--phosphor); }
+  .conn-dot.live { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 
   .mission-clock {
     margin-left: auto;
@@ -71,7 +76,7 @@
     color: var(--text-dim);
     letter-spacing: 0.06em;
   }
-  .mission-clock b { color: var(--phosphor); font-weight: 600; }
+  .mission-clock b { color: var(--accent); font-weight: 600; }
 
   /* ── Layout ── */
   .grid {
@@ -103,7 +108,7 @@
     text-transform: uppercase;
     flex-shrink: 0;
   }
-  .panel-head .count { color: var(--phosphor-dim); }
+  .panel-head .count { color: var(--accent-dim); }
 
   /* ── Video grid panel ── */
   .video-grid {
@@ -147,7 +152,7 @@
     padding: 4px 6px;
     font-size: 9px; letter-spacing: 0.06em;
     background: linear-gradient(rgba(0,0,0,0.75), transparent);
-    color: var(--phosphor);
+    color: var(--accent);
   }
   .feed-label .zone { color: var(--text-dim); }
 
@@ -173,7 +178,7 @@
   }
 
   /* ── Map panel ── */
-  .map-wrap { flex: 1; position: relative; background: #0c0f0b; }
+  .map-wrap { flex: 1; position: relative; background: #0a0812; }
   #map-canvas { width: 100%; height: 100%; display: block; }
   .map-legend {
     position: absolute; bottom: 8px; left: 10px;
@@ -196,23 +201,23 @@
     border-left: 2px solid var(--line);
     font-size: 11px;
   }
-  .health-row.online { border-left-color: var(--phosphor-dim); }
+  .health-row.online { border-left-color: var(--accent-dim); }
   .health-row.warning { border-left-color: var(--amber); }
   .health-row.critical { border-left-color: var(--red); }
 
-  .h-id { color: var(--phosphor); font-weight: 600; font-size: 11px; }
+  .h-id { color: var(--accent); font-weight: 600; font-size: 11px; }
   .h-zone { font-size: 9px; color: var(--text-dim); display: block; margin-top: 1px; }
 
   .h-bar-track {
     height: 4px; background: var(--line); border-radius: 2px; overflow: hidden;
   }
   .h-bar-fill { height: 100%; transition: width 0.4s ease; }
-  .h-bar-fill.ok { background: var(--phosphor-dim); }
+  .h-bar-fill.ok { background: var(--accent-dim); }
   .h-bar-fill.warn { background: var(--amber); }
   .h-bar-fill.crit { background: var(--red); }
 
   .h-signal { font-size: 9px; letter-spacing: 0.04em; text-align: center; padding: 2px 4px; }
-  .h-signal.strong { color: var(--phosphor-dim); }
+  .h-signal.strong { color: var(--accent-dim); }
   .h-signal.weak { color: var(--amber); }
   .h-signal.lost { color: var(--red); }
 
@@ -222,7 +227,7 @@
   .ai-strip {
     grid-column: 1 / 4;
     background: var(--bg-panel-raised);
-    border-top: 2px solid var(--phosphor-dim);
+    border-top: 2px solid var(--accent);
     padding: 14px 22px;
     display: flex;
     align-items: center;
@@ -232,26 +237,20 @@
     position: relative;
     overflow: hidden;
   }
-  .ai-strip::before {
-    content: '';
-    position: absolute; inset: 0;
-    background: linear-gradient(90deg, rgba(111,255,143,0.05), transparent 40%);
-    pointer-events: none;
-  }
   .ai-strip.warning { background: rgba(255,184,77,0.08); border-top-color: var(--amber); }
   .ai-strip.critical { background: rgba(255,92,92,0.1); border-top-color: var(--red); }
 
   .ai-icon {
     width: 38px; height: 38px; flex-shrink: 0;
-    border: 1.5px solid var(--phosphor-dim);
+    border: 1.5px solid var(--accent-dim);
     display: flex; align-items: center; justify-content: center;
-    font-size: 17px; color: var(--phosphor);
+    font-size: 17px; color: var(--accent);
     position: relative;
   }
   .ai-icon::before {
     content: '';
     position: absolute; inset: -5px;
-    border: 1px solid var(--phosphor-dim);
+    border: 1px solid var(--accent-dim);
     opacity: 0.4;
     animation: ring 2.4s infinite;
   }
@@ -267,8 +266,8 @@
     border: 1px solid var(--line-bright); color: var(--text-dim);
   }
   .ai-source-badge.live {
-    border-color: var(--phosphor-dim); color: var(--phosphor);
-    background: rgba(111,255,143,0.08);
+    border-color: var(--accent-dim); color: var(--accent);
+    background: rgba(167,139,250,0.1);
   }
   .ai-text { font-size: 14px; color: var(--text-primary); line-height: 1.55; }
   .ai-text .hl { color: var(--amber); }
@@ -284,7 +283,7 @@
   }
   .ai-timeline-bar.warning { background: var(--amber); }
   .ai-timeline-bar.critical { background: var(--red); }
-  .ai-timeline-bar.normal { background: var(--phosphor-dim); }
+  .ai-timeline-bar.normal { background: var(--accent-dim); }
 
   /* ── Mission summary strip (top of right col) ── */
   .summary-bar {
@@ -298,7 +297,7 @@
     border-right: 1px solid var(--line);
   }
   .summary-stat:last-child { border-right: none; }
-  .summary-stat .val { font-size: 18px; font-weight: 600; color: var(--phosphor); line-height: 1; }
+  .summary-stat .val { font-size: 18px; font-weight: 600; color: var(--accent); line-height: 1; }
   .summary-stat .lbl { font-size: 9px; color: var(--text-dim); letter-spacing: 0.06em; margin-top: 4px; text-transform: uppercase; }
 
   @keyframes pulse { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
@@ -333,7 +332,7 @@
     <div class="map-wrap">
       <canvas id="map-canvas"></canvas>
       <div class="map-legend">
-        <span><span class="legend-dot" style="background:#6fff8f"></span>ONLINE</span>
+        <span><span class="legend-dot" style="background:#a78bfa"></span>ONLINE</span>
         <span><span class="legend-dot" style="background:#ffb84d"></span>WARNING</span>
         <span><span class="legend-dot" style="background:#ff5c5c"></span>CRITICAL</span>
       </div>
@@ -435,15 +434,15 @@ function project(lat, lon) {
 function statusColor(status) {
   if (status === 'CRITICAL') return '#ff5c5c';
   if (status === 'WARNING') return '#ffb84d';
-  return '#6fff8f';
+  return '#a78bfa';
 }
 
 function drawMap() {
-  ctx.fillStyle = '#0c0f0b';
+  ctx.fillStyle = '#0a0812';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   // grid
-  ctx.strokeStyle = 'rgba(111,255,143,0.04)';
+  ctx.strokeStyle = 'rgba(167,139,250,0.05)';
   ctx.lineWidth = 1;
   for (let i = 0; i < canvas.width; i += 30) {
     ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,canvas.height); ctx.stroke();
@@ -453,7 +452,7 @@ function drawMap() {
   }
 
   if (!mapBounds) {
-    ctx.fillStyle = '#3a4536';
+    ctx.fillStyle = '#4a4264';
     ctx.font = '11px monospace';
     ctx.textAlign = 'center';
     ctx.fillText('AWAITING GPS TELEMETRY...', canvas.width/2, canvas.height/2);
@@ -469,7 +468,7 @@ function drawMap() {
       const p = project(pt.lat, pt.lon);
       if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
     });
-    ctx.strokeStyle = 'rgba(111,255,143,0.25)';
+    ctx.strokeStyle = 'rgba(167,139,250,0.28)';
     ctx.lineWidth = 1.5;
     ctx.stroke();
   });
@@ -489,7 +488,7 @@ function drawMap() {
     ctx.fill();
     ctx.shadowBlur = 0;
 
-    ctx.fillStyle = '#d8ead0';
+    ctx.fillStyle = '#e4ddf7';
     ctx.font = '9px monospace';
     ctx.textAlign = 'left';
     ctx.fillText(id.replace('DRONE_','D'), p.x + 9, p.y + 3);
