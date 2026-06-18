@@ -16,7 +16,7 @@ from dataclasses import asdict
 import pytest
 
 pytest.importorskip("ultralytics")
-pytest.importorskip("cv2")
+cv2 = pytest.importorskip("cv2")
 
 from src import config  # noqa: E402
 from src.producer import drone_producer, stop_events  # noqa: E402
@@ -82,3 +82,18 @@ def test_demo_drone_actually_detects_people():
         f"{DEMO_DRONE} ({config.VIDEO_PATHS[DEMO_DRONE]}) produced no detections "
         f"over {len(packets)} frames — footage may have regressed"
     )
+
+
+def test_packets_carry_decodable_video_frames():
+    """Live video: every packet must carry a base64 JPEG the dashboard can render."""
+    import base64
+    import numpy as np
+
+    packets = _run_producer(DEMO_DRONE)
+    assert packets, "producer emitted no packets"
+    for p in packets:
+        assert p.frame_b64, "packet missing frame_b64 — dashboard video would be blank"
+    # Spot-check the first frame actually decodes back to an image.
+    raw = base64.b64decode(packets[0].frame_b64)
+    decoded = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    assert decoded is not None
