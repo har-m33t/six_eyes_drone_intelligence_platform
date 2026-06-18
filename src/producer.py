@@ -37,12 +37,24 @@ def encode_frame_b64(frame, width=None, quality=None):
     return base64.b64encode(buf).decode("ascii")
 
 
+def _build_signal_lost_packet(drone_id, frame_idx, frame_b64):
+    """A terminal packet that forces the drone into the SIGNAL LOST / CRITICAL
+    state. The last frame is reused so the dashboard shows the frozen image
+    under its greyed-out SIGNAL LOST overlay rather than going blank.
+    """
+    packet = build_packet(drone_id, frame_idx, detections=[], frame_b64=frame_b64)
+    packet.health["signal"] = "LOST"
+    packet.health["status"] = "CRITICAL"
+    return packet
+
+
 def drone_producer(drone_id, video_path, sender, start_offset=0):
     model = load_model()
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     frame_delay = 1.0 / fps
     frame_idx = 0
+    last_frame_b64 = None
 
     if start_offset > 0:
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_offset)
@@ -57,6 +69,7 @@ def drone_producer(drone_id, video_path, sender, start_offset=0):
 
         detections = run_detection(model, frame)
         frame_b64 = encode_frame_b64(frame)
+        last_frame_b64 = frame_b64
         packet = build_packet(drone_id, frame_idx, detections, frame_b64=frame_b64)
         sender.send(packet)
 
@@ -65,7 +78,12 @@ def drone_producer(drone_id, video_path, sender, start_offset=0):
         time.sleep(max(0, frame_delay - elapsed))  # maintain real-time FPS
 
     cap.release()
-    print(f"[{drone_id}] producer stopped.")
+    # Killing the thread is the demo's signal-lost trigger (README §9 Event 1).
+    # The dashboard has no staleness timeout, so without a terminal packet the
+    # tile/health/map would freeze on the last ONLINE state and never turn red.
+    # Emit one final SIGNAL LOST / CRITICAL packet so the kill is reflected.
+    sender.send(_build_signal_lost_packet(drone_id, frame_idx, last_frame_b64))
+    print(f"[{drone_id}] producer stopped — emitted SIGNAL LOST.")
 
 
 def launch_producers(sender):
