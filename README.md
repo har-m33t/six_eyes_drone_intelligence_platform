@@ -1,4 +1,4 @@
-# SIX-EYES — Drone Fleet Intelligence Dashboard
+# SIX-EYES — Drone Fleet Intelligence Dashboard (Palanitr Build Challenge)
 ## Project Specification v1.0
  
 ---
