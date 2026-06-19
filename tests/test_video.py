@@ -5,7 +5,6 @@ It travels on the WebSocket path only; the Foundry telemetry dataset has no
 video column, so the secondary sink must strip it.
 """
 import base64
-import time
 from dataclasses import asdict
 
 import numpy as np
@@ -13,10 +12,8 @@ import pytest
 
 cv2 = pytest.importorskip("cv2")
 
-from src import config  # noqa: E402
 from src.packet import build_packet  # noqa: E402
 from src.producer import encode_frame_b64  # noqa: E402
-from src.transport import foundry_client  # noqa: E402
 
 
 def _frame(h=720, w=1280):
@@ -50,31 +47,3 @@ def test_packet_carries_frame_b64_through_json():
     assert d["frame_b64"] == "QUJD"
     import json
     assert json.loads(json.dumps(d))["frame_b64"] == "QUJD"
-
-
-def test_foundry_payload_strips_frame_b64_but_keeps_telemetry(monkeypatch):
-    """Secondary sink must drop the video frame; primary (WS) keeps it."""
-    captured = {}
-
-    def fake_post(url, headers=None, json=None, timeout=None):
-        captured["json"] = json
-        return None
-
-    monkeypatch.setattr(foundry_client.requests, "post", fake_post)
-
-    packet = build_packet("DRONE_1", frame_idx=0, detections=[], frame_b64="BIGFRAME")
-    foundry_client.push_to_foundry(packet)
-
-    deadline = time.time() + 2
-    while "json" not in captured and time.time() < deadline:
-        time.sleep(0.02)
-
-    assert "json" in captured, "Foundry push never fired"
-    payload = captured["json"]
-    assert "frame_b64" not in payload, "video frame must not go to Foundry"
-    # Telemetry the dataset DOES want is still present.
-    assert payload["drone_id"] == "DRONE_1"
-    assert "gps" in payload and "health" in payload
-
-    # The WebSocket payload, by contrast, keeps the frame.
-    assert asdict(packet)["frame_b64"] == "BIGFRAME"

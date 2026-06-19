@@ -34,9 +34,11 @@ The non-obvious design centers on a **dual-sink fan-out** with a deliberate prio
 
 1. **Producer threads** (`src/producer.py`) — one daemon thread per drone, six total. Each loops its MP4 via OpenCV, paces itself toward real-time FPS with a manual `time.sleep()`, runs YOLOv8n person detection (`src/inference.py`), merges detections with simulated GPS + health (`src/simulators.py`) into a `DronePacket` (`src/packet.py`), and hands it to the sender. The six threads **share one YOLO model** (loaded + warmed once in `main()`); inference is serialized with a lock and runs on a frame stride (`config.DETECT_EVERY_N`) because on CPU, inference — not OpenCV decode — is the throughput limiter for six concurrent feeds, so the real-time sleep rarely engages and playback runs somewhat below real-time.
 
-2. **`DualSinkSender`** (`src/transport/foundry_client.py`) is the critical junction. Every packet goes to **two sinks with different guarantees**:
-   - **PRIMARY — WebSocket** (`src/transport/websocket_server.py`): synchronous-feel broadcast to all dashboard clients via `asyncio.run_coroutine_threadsafe`. This drives the live dashboard and must stay <100ms latency.
-   - **SECONDARY — Foundry REST** (`push_to_foundry`): fire-and-forget on its own background thread, wrapped in try/except. It **must never block or fail the WebSocket path** — this is why it is async and swallows exceptions. It persists telemetry for the AIP agent's context.
+2. **Dual sink** with different guarantees. The fan-out is **split across two owners** (changed from the original single-junction design — see note):
+   - **PRIMARY — WebSocket**, via `DualSinkSender.send()` (`src/transport/foundry_client.py` → `websocket_server.py`): every `DronePacket`, every frame, broadcast to all dashboard clients via `asyncio.run_coroutine_threadsafe`. Drives the live dashboard, must stay <100ms latency. This path is untouched by the Foundry sink.
+   - **SECONDARY — Foundry REST**, driven from the **producer** (not the sender): `producer.drone_producer` builds flat `TelemetryRow`/`DetectionRow` dicts (`src/packet.py`) from data already on the packet and calls `write_telemetry`/`write_detection` (`foundry_client.py`). Those are **non-blocking enqueues**; a single background flush thread batches rows and lands them via Foundry's real ingestion flow (open APPEND transaction → upload CSV → commit) into two datasets (`TELEMETRY_DATASET_RID`, `DETECTION_DATASET_RID`). It **must never block or fail the WebSocket path** — enqueue is non-blocking, all I/O is on the flush thread, and every step swallows/loggs errors with HTTP status. Gated by `FOUNDRY_ENABLED`.
+
+   > **Architecture change (2026-06-19):** previously `DualSinkSender` was the single junction doing both sinks (`push_to_foundry`, thread-per-packet). The Foundry sink was moved out of the sender into the producer + a batched flush thread (per `.claude/foundary-task.md`); `push_to_foundry`/`_FoundryWorker` are gone. The WebSocket path and `DronePacket` wire format are unchanged.
 
 3. **Shared mission clock**: `MISSION_START = time.time()` is set once and shared across all threads. GPS sinusoids, battery decay, and `elapsed_s` all derive from it, so the six feeds stay time-synchronized. Drone independence is faked via per-drone `START_OFFSETS` (video) and distinct `DRONE_PATTERNS` (GPS amplitude/frequency).
 
@@ -44,7 +46,7 @@ The non-obvious design centers on a **dual-sink fan-out** with a deliberate prio
 
 ### Threading & async boundary
 
-This is the trickiest part to get right: producer code is **synchronous threaded** (6 threads), but the WebSocket server is **asyncio**. They communicate across the boundary via `asyncio.run_coroutine_threadsafe(broadcast(packet), ws_loop)`. The sender must hold a reference to the running WS event loop. Foundry pushes spawn their own short-lived threads and are independent of the WS loop.
+This is the trickiest part to get right: producer code is **synchronous threaded** (6 threads), but the WebSocket server is **asyncio**. They communicate across the boundary via `asyncio.run_coroutine_threadsafe(broadcast(packet), ws_loop)`. The sender must hold a reference to the running WS event loop. Foundry writes are enqueued (non-blocking) from the producer threads and drained by **one** background flush thread — independent of the WS loop and never thread-per-write.
 
 ## Key Conventions
 

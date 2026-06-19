@@ -4,7 +4,8 @@ The packet is the single wire format sent identically to both sinks
 (WebSocket + Foundry) via dataclasses.asdict() -> JSON.
 """
 import time
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import asdict, dataclass, field
 
 from . import config
 from .simulators import simulate_gps, simulate_health
@@ -39,3 +40,65 @@ def build_packet(drone_id: str, frame_idx: int, detections: list,
         },
         frame_b64=frame_b64,
     )
+
+
+# --- Foundry rows -----------------------------------------------------------
+# Flat, column-shaped rows for the two real Foundry datasets (see
+# .claude/foundary-task.md). These are ADDITIVE and independent of DronePacket
+# (the WebSocket wire format) — built from the same gps/health/mission data the
+# packet already carries, so nothing is recomputed.
+
+@dataclass
+class TelemetryRow:
+    drone_id: str
+    timestamp: float
+    lat: float
+    lon: float
+    alt: float
+    battery: float
+    signal: str
+    status: str
+    speed_ms: float
+    zone: str
+    coverage_pct: float
+
+
+@dataclass
+class DetectionRow:
+    detection_id: str   # uuid4 string
+    drone_id: str
+    timestamp: float
+    confidence: float
+    lat: float
+    lon: float
+
+
+def make_telemetry_row(drone_id: str, timestamp: float, gps: dict,
+                       health: dict, mission: dict) -> dict:
+    """Build a flat telemetry row (plain dict) from data already on the packet."""
+    return asdict(TelemetryRow(
+        drone_id=drone_id,
+        timestamp=timestamp,
+        lat=gps["lat"],
+        lon=gps["lon"],
+        alt=gps["alt"],
+        battery=health["battery"],
+        signal=health["signal"],
+        status=health["status"],
+        speed_ms=health["speed_ms"],
+        zone=mission["zone"],
+        coverage_pct=mission["coverage_pct"],
+    ))
+
+
+def make_detection_row(drone_id: str, timestamp: float, confidence: float,
+                       gps: dict) -> dict:
+    """Build a flat detection row (plain dict) with a fresh uuid4 detection_id."""
+    return asdict(DetectionRow(
+        detection_id=str(uuid.uuid4()),
+        drone_id=drone_id,
+        timestamp=timestamp,
+        confidence=confidence,
+        lat=gps["lat"],
+        lon=gps["lon"],
+    ))
