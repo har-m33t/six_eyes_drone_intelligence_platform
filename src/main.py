@@ -17,6 +17,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src import config
+from src.inference import warmup
 from src.producer import launch_producers
 from src.transport.foundry_client import DualSinkSender
 from src.transport.websocket_server import serve_forever
@@ -37,6 +38,13 @@ def main():
 
     sender = DualSinkSender(ws_loop)
     print(f"[main] Foundry sink: {'enabled' if sender.foundry_enabled else 'disabled'}")
+
+    # Load + warm the shared YOLO model once, before producers start. Otherwise
+    # the first-inference warmup lands on the first live frame of all six feeds
+    # at once and leaves every dashboard tile blank for several seconds.
+    print("[main] Loading detection model...")
+    warmup()
+    print("[main] Model ready.")
 
     launch_producers(sender)
     print("[main] Six drone producers running. Ctrl+C to stop.")

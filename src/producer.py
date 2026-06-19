@@ -60,6 +60,7 @@ def drone_producer(drone_id, video_path, sender, start_offset=0):
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_offset)
 
     stop = stop_events[drone_id]
+    detections = []  # reused on the frames between detection runs (see stride below)
     while not stop.is_set():
         t_start = time.time()
         ret, frame = cap.read()
@@ -67,7 +68,11 @@ def drone_producer(drone_id, video_path, sender, start_offset=0):
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # loop video
             continue
 
-        detections = run_detection(model, frame)
+        # Detect on a frame stride, not every frame: six CPU YOLO streams can't
+        # infer every frame in real time (review finding #8). Video still streams
+        # every frame; detections carry over from the last run in between.
+        if frame_idx % config.DETECT_EVERY_N == 0:
+            detections = run_detection(model, frame)
         frame_b64 = encode_frame_b64(frame)
         last_frame_b64 = frame_b64
         packet = build_packet(drone_id, frame_idx, detections, frame_b64=frame_b64)

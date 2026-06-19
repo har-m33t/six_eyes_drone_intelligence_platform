@@ -62,6 +62,20 @@ DRONE_PATTERNS = {
 YOLO_MODEL = os.getenv("YOLO_MODEL", "yolov8n.pt")
 PERSON_CLASS_ID = 0  # COCO class 0 = person
 
+# Inference resolution. YOLO scales detections back to full-frame coordinates,
+# so this only trades accuracy for speed, not bbox placement. 416 is the floor
+# that still reliably detects people on the footage (320 missed everyone in
+# benchmarking) while running ~1.8x faster than the 640 default — the lever that
+# lets six CPU-bound feeds approach real-time (review finding #8).
+YOLO_IMGSZ = int(os.getenv("YOLO_IMGSZ", "416"))
+
+# Run YOLO every Nth frame per drone and reuse the last result on the frames in
+# between; video still streams every frame. Six CPU YOLO streams can't infer
+# every frame in real time, so this is the main throughput lever — at 25 fps a
+# stride of 4 refreshes detections ~6x/s, imperceptible for the demo. Set to 1
+# to detect every frame (slow-motion playback on CPU).
+DETECT_EVERY_N = int(os.getenv("DETECT_EVERY_N", "4"))
+
 # --- Video streaming --------------------------------------------------------
 # Each frame is downscaled and JPEG-encoded to base64 (packet.frame_b64) for the
 # dashboard video grid. Frames are kept small so the primary WebSocket path stays

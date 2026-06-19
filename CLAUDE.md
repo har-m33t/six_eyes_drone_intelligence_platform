@@ -32,7 +32,7 @@ Requires a `.env` file (see README §7): `FOUNDRY_URL`, `FOUNDRY_TOKEN`, `DATASE
 
 The non-obvious design centers on a **dual-sink fan-out** with a deliberate priority split. Read these together to understand the data path:
 
-1. **Producer threads** (`src/producer.py`) — one daemon thread per drone, six total. Each loops its MP4 via OpenCV, paces itself to real-time FPS with a manual `time.sleep()` (OpenCV reads faster than real-time), runs YOLOv8n person detection (`src/inference.py`), merges detections with simulated GPS + health (`src/simulators.py`) into a `DronePacket` (`src/packet.py`), and hands it to the sender.
+1. **Producer threads** (`src/producer.py`) — one daemon thread per drone, six total. Each loops its MP4 via OpenCV, paces itself toward real-time FPS with a manual `time.sleep()`, runs YOLOv8n person detection (`src/inference.py`), merges detections with simulated GPS + health (`src/simulators.py`) into a `DronePacket` (`src/packet.py`), and hands it to the sender. The six threads **share one YOLO model** (loaded + warmed once in `main()`); inference is serialized with a lock and runs on a frame stride (`config.DETECT_EVERY_N`) because on CPU, inference — not OpenCV decode — is the throughput limiter for six concurrent feeds, so the real-time sleep rarely engages and playback runs somewhat below real-time.
 
 2. **`DualSinkSender`** (`src/transport/foundry_client.py`) is the critical junction. Every packet goes to **two sinks with different guarantees**:
    - **PRIMARY — WebSocket** (`src/transport/websocket_server.py`): synchronous-feel broadcast to all dashboard clients via `asyncio.run_coroutine_threadsafe`. This drives the live dashboard and must stay <100ms latency.
