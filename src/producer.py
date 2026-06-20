@@ -28,6 +28,7 @@ stop_events = {drone_id: threading.Event() for drone_id in config.DRONE_IDS}
 # writes it (via the registered mission handler) while six producer threads read
 # it every frame — so all access is guarded by _nav_lock.
 _navigators = {}
+_last_gps_by_drone = {}
 _nav_lock = threading.Lock()
 
 
@@ -61,6 +62,73 @@ def _coerce_waypoints(waypoints):
     return route
 
 
+def _hover_gps(drone_id):
+    """Fixed pre-mission GPS so drones hold position until START_MISSION."""
+    pattern = config.DRONE_PATTERNS[drone_id]
+    lng = round(config.BASE_LON + pattern["lon_amp"], 6)
+    lat = round(config.BASE_LAT, 6)
+    return {"lat": lat, "lng": lng, "lon": lng, "alt": 75.0, "coverage_active": False}
+
+
+def _gps_point(gps):
+    if not gps:
+        return None
+    lng = gps.get("lng", gps.get("lon"))
+    lat = gps.get("lat")
+    if lng is None or lat is None:
+        return None
+    lng, lat = float(lng), float(lat)
+    if not math.isfinite(lng) or not math.isfinite(lat):
+        return None
+    return (lng, lat)
+
+
+def _current_route_start(drone_id):
+    return _gps_point(_last_gps_by_drone.get(drone_id)) or _gps_point(_hover_gps(drone_id))
+
+
+def _looks_like_lnglat_route(route):
+    if not route:
+        return False
+    xs = [pt[0] for pt in route]
+    ys = [pt[1] for pt in route]
+    if not all(-180 <= x <= 180 for x in xs) or not all(-90 <= y <= 90 for y in ys):
+        return False
+    if max(max(xs) - min(xs), max(ys) - min(ys)) > 1.0:
+        return False
+    return any(abs(x) > 90 for x in xs) or any(abs(y) > 10 for y in ys)
+
+
+def _route_with_transit_start(drone_id, route):
+    """Prepend the drone's current map position so deploy never teleports."""
+    if not route:
+        return route, 0, 0
+    if not _looks_like_lnglat_route(route):
+        return route, 0, len(route)
+    current = _current_route_start(drone_id)
+    if current is None:
+        return route, 0, len(route)
+    first = route[0]
+    distance = math.hypot(first[0] - current[0], first[1] - current[1])
+    if distance <= 1e-12:
+        return route, 0, len(route)
+    return [current] + route, 1, len(route)
+
+
+def _attach_mission_progress(nav, coverage_start_index, mission_waypoint_count):
+    nav.coverage_start_index = int(coverage_start_index)
+    nav.mission_waypoint_count = int(mission_waypoint_count)
+    nav.coverage_speed = nav.speed
+
+
+def _set_nav_phase_speed(nav):
+    if int(getattr(nav, "coverage_start_index", 0)) > 0:
+        if nav.current_waypoint_idx <= int(getattr(nav, "coverage_start_index", 0)):
+            nav.speed = config.NAV_GEO_TRANSIT_SPEED_DEG_S
+        else:
+            nav.speed = getattr(nav, "coverage_speed", nav.speed)
+
+
 def inject_mission(plan) -> int:
     """Mission handler (registered with websocket_server.set_mission_handler).
 
@@ -90,12 +158,16 @@ def inject_mission(plan) -> int:
             if route is None:
                 print(f"[producer] Mission plan: bad route for {plan_key!r}, skipped.")
                 continue
+            nav_route, coverage_start_index, mission_waypoint_count = _route_with_transit_start(
+                drone_id, route
+            )
             nav = _navigators.get(drone_id)
             if nav is None:
-                nav = WaypointNavigator(route)
+                nav = WaypointNavigator(nav_route)
                 _navigators[drone_id] = nav
             else:
-                nav.set_waypoints(route)  # re-deploy onto a new polygon
+                nav.set_waypoints(nav_route)  # re-deploy onto a new polygon
+            _attach_mission_progress(nav, coverage_start_index, mission_waypoint_count)
             nav.activate()
             activated += 1
     print(f"[producer] START_MISSION injected -- {activated} drone(s) navigating.")
@@ -113,6 +185,7 @@ def reset_navigators():
     and by tests to isolate the shared registry between runs."""
     with _nav_lock:
         _navigators.clear()
+        _last_gps_by_drone.clear()
 
 # Foundry telemetry is enqueued at most this often per drone (the dataset is a
 # 5s-cadence state log, not a per-frame firehose). Detections are enqueued as
@@ -154,6 +227,25 @@ def _build_signal_lost_packet(drone_id, frame_idx, frame_b64):
     return packet
 
 
+def _mission_telemetry(nav, telemetry):
+    """Translate navigator route progress into mission-only coverage progress."""
+    if not telemetry:
+        return None
+    coverage_start_index = int(getattr(nav, "coverage_start_index", 0))
+    mission_waypoint_count = int(
+        getattr(nav, "mission_waypoint_count", len(getattr(nav, "waypoints", [])))
+    )
+    reached = int(telemetry.get("current_waypoint_idx", 0))
+    done = max(0, min(mission_waypoint_count, reached - coverage_start_index))
+    remaining = max(0, mission_waypoint_count - done)
+    result = dict(telemetry)
+    result["current_waypoint_idx"] = done
+    result["waypoints_remaining"] = remaining
+    result["mission_complete"] = remaining == 0
+    result["coverage_active"] = done > 0
+    return result
+
+
 def _gps_from_nav_telemetry(telemetry):
     """Convert navigator route coordinates into the Mapbox GPS packet shape.
 
@@ -171,15 +263,28 @@ def _gps_from_nav_telemetry(telemetry):
     lat = float(telemetry["y"])
     if not math.isfinite(lng) or not math.isfinite(lat):
         return None
-    return {"lat": lat, "lng": lng, "lon": lng, "alt": 75.0}
+    return {
+        "lat": lat,
+        "lng": lng,
+        "lon": lng,
+        "alt": 75.0,
+        "coverage_active": telemetry.get("coverage_active", True),
+    }
 
 
-def _hover_gps(drone_id):
-    """Fixed pre-mission GPS so drones hold position until START_MISSION."""
-    pattern = config.DRONE_PATTERNS[drone_id]
-    lng = round(config.BASE_LON + pattern["lon_amp"], 6)
-    lat = round(config.BASE_LAT, 6)
-    return {"lat": lat, "lng": lng, "lon": lng, "alt": 75.0}
+def _remember_gps(drone_id, gps):
+    point = _gps_point(gps)
+    if point is None:
+        return
+    lng, lat = point
+    with _nav_lock:
+        _last_gps_by_drone[drone_id] = {
+            "lat": lat,
+            "lng": lng,
+            "lon": lng,
+            "alt": gps.get("alt", 75.0),
+            "coverage_active": gps.get("coverage_active", False),
+        }
 
 
 def drone_producer(drone_id, video_path, sender, start_offset=0):
@@ -220,7 +325,8 @@ def drone_producer(drone_id, video_path, sender, start_offset=0):
         nav_telemetry = None
         gps_override = _hover_gps(drone_id)
         if nav is not None and nav.active:
-            nav_telemetry = nav.tick(now - nav_last_t)
+            _set_nav_phase_speed(nav)
+            nav_telemetry = _mission_telemetry(nav, nav.tick(now - nav_last_t))
             gps_override = _gps_from_nav_telemetry(nav_telemetry) or gps_override
         nav_last_t = now
 
@@ -233,6 +339,7 @@ def drone_producer(drone_id, video_path, sender, start_offset=0):
             frame_b64=frame_b64,
             gps_override=gps_override,
         )
+        _remember_gps(drone_id, packet.gps)
         sender.send(packet)
 
         # --- ADDITIVE: real Foundry dataset writes, off the WebSocket hot path.
