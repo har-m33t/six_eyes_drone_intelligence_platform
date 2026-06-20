@@ -56,10 +56,7 @@ def _looks_like_small_lnglat_route(waypoints: List[Waypoint]) -> bool:
 
 def _default_speed_for_route(waypoints: List[Waypoint]) -> float:
     if _looks_like_small_lnglat_route(waypoints):
-        duration = max(config.NAV_GEO_ROUTE_DURATION_S, 1.0)
-        length = _path_length(waypoints)
-        if length > 0:
-            return length / duration
+        return config.NAV_GEO_SPEED_DEG_S
     return config.NAV_SPEED_UNITS_S
 
 
@@ -184,8 +181,8 @@ class WaypointNavigator:
         target = self.target
         total = len(self.waypoints)
         return {
-            "x": round(self.x, 2),
-            "y": round(self.y, 2),
+            "x": self.x,
+            "y": self.y,
             "current_waypoint_idx": target,
             "waypoints_remaining": max(0, total - target),
             "mission_complete": target >= total,
