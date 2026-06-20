@@ -1,30 +1,35 @@
 /**
- * Acceptance tests for Task 1 of `.claude/deploy-swarm-integration.md`
- * ("Frontend UI & Payload Generation") — the "DEPLOY SWARM" trigger.
+ * Acceptance tests for Task 2 of `.claude/map-box-integration.md`
+ * ("Polygon Drawing Tool — Mapbox Draw") — the "DEPLOY SWARM" trigger.
  *
  * These verify the SHIPPED behavior in `six_eyes_dashboard.html`:
  *   - a visible "DEPLOY SWARM" button styled with the black/purple system,
- *   - operator draws a search-area polygon by clicking the GPS map,
- *   - clicking DEPLOY transmits the STRICT wire schema
- *         { "command": "START_MISSION", "polygon": [[x, y], ...] }
+ *   - the operator draws a search-area polygon with the Mapbox GL Draw control
+ *     (draw_polygon only) instead of the old canvas clicks,
+ *   - clicking DEPLOY extracts the drawn polygon's GeoJSON ring and transmits the
+ *     STRICT wire schema
+ *         { "command": "START_MISSION", "polygon": [[lng, lat], ...] }
  *     over the existing WebSocket.
  *
  * Why Node's built-in runner + `vm`: the frontend is kept "strictly vanilla
  * HTML/JS" with no package.json / npm deps, so we avoid jest/jsdom. We extract
- * the dashboard's <script>, run it in a `vm` context against a minimal mock DOM,
- * and exercise the *real* wiring rather than a copy.
+ * the dashboard's <script>, run it in a `vm` context against a minimal mock DOM
+ * + mocked `mapboxgl` / `MapboxDraw` (the CDN libs aren't loaded in tests), and
+ * exercise the *real* wiring rather than a copy.
  *
  * Run (Node >= 18; this repo is on v24):
  *   node --test tests/deploy_swarm.test.mjs
  *
  * ---------------------------------------------------------------------------
- * Observed Task 1 contract (what these tests pin to the implementation):
+ * Observed Task 2 contract (what these tests pin to the implementation):
  *   - <button id="deploySwarmBtn">DEPLOY SWARM</button> (+ a CLEAR button).
- *   - `missionPolygon` : top-level array of `[x, y]` SIM_WORLD vertices, filled
- *     by clicking `canvas.parentElement` (the map). >=3 vertices = a polygon.
- *   - `refreshDeployControls()` enables DEPLOY only at >=3 vertices.
+ *   - `draw` : a MapboxDraw instance added to the map, restricted to polygon.
+ *   - `getMissionPolygon()` : returns the drawn polygon's outer ring as
+ *     `[lng, lat]` vertices with the GeoJSON closing vertex dropped.
+ *   - `refreshDeployControls()` (fired on draw.create/update/delete) enables
+ *     DEPLOY only at >=3 vertices.
  *   - `deploySwarm()` : bound to the button; sends
- *       JSON.stringify({ command: "START_MISSION", polygon: missionPolygon })
+ *       JSON.stringify({ command: "START_MISSION", polygon: [[lng,lat],...] })
  *     ONLY when there are >=3 vertices AND `ws.readyState === WebSocket.OPEN`;
  *     otherwise it flashes a hint and sends nothing (fail-soft, no throw).
  * ---------------------------------------------------------------------------
@@ -40,26 +45,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HTML_PATH = path.join(__dirname, '..', 'six_eyes_dashboard.html');
 const HTML = fs.readFileSync(HTML_PATH, 'utf8');
 
-// The mock canvas/map is 300x300 and SIM_WORLD is 1000x1000, so a map click at
-// pixel (px, py) maps to sim (px/300*1000, py/300*1000). Pick pixels that land
-// on round sim coords for readable assertions.
-const CANVAS_PX = 300;
-const SIM_SPAN = 1000;
-const simFromPx = (px) => Math.round((px / CANVAS_PX) * SIM_SPAN);
-// Clicks at (3,3),(30,3),(30,30) -> sim (10,10),(100,10),(100,100).
-const CLICK_PTS = [
-  { clientX: 3, clientY: 3 },
-  { clientX: 30, clientY: 3 },
-  { clientX: 30, clientY: 30 },
+// A search-area polygon in geographic [lng, lat] near the map's default center
+// (Irvine, CA). Three distinct vertices = a deployable polygon.
+const POLY_LNGLAT = [
+  [-117.83, 33.67],
+  [-117.81, 33.67],
+  [-117.81, 33.69],
 ];
-const EXPECTED_POLY = CLICK_PTS.map((c) => [simFromPx(c.clientX), simFromPx(c.clientY)]);
 
 // --------------------------------------------------------------------------- //
 // Mock DOM / browser environment
 // --------------------------------------------------------------------------- //
 
 // A 2D canvas context where every method is a no-op and every property is
-// settable — enough for drawMap()/paintFootprint()/drawMissionPolygon() to run.
+// settable — enough for drawMap()/paintFootprint() to run.
 function makeCtx() {
   return new Proxy(
     {},
@@ -81,6 +80,8 @@ function makeClassList() {
   };
 }
 
+const CANVAS_PX = 300;
+
 function makeElement(tagOrId, ctx, makeParent = true) {
   const handlers = {};
   const el = {
@@ -94,7 +95,7 @@ function makeElement(tagOrId, ctx, makeParent = true) {
     height: CANVAS_PX,
     clientWidth: CANVAS_PX,
     clientHeight: CANVAS_PX,
-    style: {},
+    style: { setProperty() {} },
     dataset: {},
     classList: makeClassList(),
     addEventListener: (ev, fn) => ((handlers[ev] ||= []).push(fn)),
@@ -114,8 +115,6 @@ function makeElement(tagOrId, ctx, makeParent = true) {
     getContext: () => ctx,
     getBoundingClientRect: () => ({ left: 0, top: 0, width: CANVAS_PX, height: CANVAS_PX }),
   };
-  // A real parent element so `canvas.parentElement.addEventListener(...)` and
-  // `.getBoundingClientRect()` (the map-click vertex capture) work.
   el.parentElement = makeParent
     ? makeElement('parent-of-' + tagOrId, ctx, false)
     : { clientWidth: CANVAS_PX, clientHeight: CANVAS_PX };
@@ -143,14 +142,99 @@ class MockWebSocket {
   }
 }
 
+// --- Mapbox GL JS mock (Task 1 surface the dashboard boots against) --------- //
+// The dashboard creates a `map`, adds controls, and registers draw.* handlers.
+// We capture the handlers so tests can fire 'draw.create' etc.
+class MockMap {
+  constructor(opts) {
+    this.opts = opts;
+    this._handlers = {};
+    this._sources = {}; // id -> { setData() } (Task 4 coverage source)
+    this._layers = [];
+  }
+  addControl() {
+    return this;
+  }
+  on(ev, fn) {
+    (this._handlers[ev] ||= []).push(fn);
+    return this;
+  }
+  // Task 4 GeoJSON source/layer API the coverage trail uses.
+  isStyleLoaded() {
+    return true; // style is "ready" so initCoverageLayer() runs at load
+  }
+  getSource(id) {
+    return this._sources[id];
+  }
+  addSource(id, opts) {
+    this._sources[id] = { _data: opts && opts.data, setData(d) { this._data = d; } };
+    return this;
+  }
+  addLayer(opts) {
+    this._layers.push(opts);
+    return this;
+  }
+  // Test helper: fire a registered map event (e.g. 'draw.create').
+  _fire(ev, arg) {
+    (this._handlers[ev] || []).forEach((fn) => fn(arg));
+  }
+}
+const mapboxglMock = {
+  accessToken: '',
+  Map: MockMap,
+  NavigationControl: class {
+    constructor(o) {
+      this.o = o;
+    }
+  },
+  Marker: class {
+    constructor(o) {
+      this.o = o;
+    }
+    setLngLat() {
+      return this;
+    }
+    addTo() {
+      return this;
+    }
+  },
+};
+
+// --- Mapbox GL Draw mock (Task 2) ------------------------------------------- //
+// Stands in for @mapbox/mapbox-gl-draw. Holds a GeoJSON FeatureCollection that
+// the dashboard reads via getAll(); a test helper seeds a drawn polygon.
+class MockMapboxDraw {
+  constructor(opts) {
+    this.opts = opts;
+    this._features = [];
+  }
+  getAll() {
+    return { type: 'FeatureCollection', features: this._features };
+  }
+  deleteAll() {
+    this._features = [];
+    return this;
+  }
+  // Test helper: stage a drawn polygon from [[lng,lat], ...], auto-closing the
+  // ring the way Mapbox Draw does (last vertex repeats the first).
+  _setPolygon(coords) {
+    const ring = coords.map((c) => c.slice());
+    if (ring.length) ring.push(ring[0].slice());
+    this._features = [
+      { type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring] } },
+    ];
+  }
+}
+
 // Captures whatever the dashboard exposes (typeof-guarded so a missing binding
 // can never raise a ReferenceError inside the vm).
 const EPILOGUE = `
 ;globalThis.__SIXEYES_TEST__ = {
   ws: (typeof ws !== 'undefined') ? ws : null,
   deploySwarm: (typeof deploySwarm === 'function') ? deploySwarm : null,
-  missionPolygon: (typeof missionPolygon !== 'undefined') ? missionPolygon : null,
-  mapEl: (typeof canvas !== 'undefined') ? canvas.parentElement : null,
+  getMissionPolygon: (typeof getMissionPolygon === 'function') ? getMissionPolygon : null,
+  draw: (typeof draw !== 'undefined') ? draw : null,
+  map: (typeof map !== 'undefined') ? map : null,
   deployBtn: (typeof deploySwarmBtn !== 'undefined') ? deploySwarmBtn : null,
   clearBtn: (typeof clearPolygonBtn !== 'undefined') ? clearPolygonBtn : null,
 };
@@ -159,7 +243,11 @@ const EPILOGUE = `
 function extractScript(html) {
   const matches = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)];
   assert.ok(matches.length > 0, 'dashboard HTML should contain a <script> block');
-  return matches[matches.length - 1][1];
+  // The CDN <script src=...> tags have empty bodies; take the last NON-EMPTY
+  // block, which is the dashboard's inline logic.
+  const nonEmpty = matches.filter((m) => m[1].trim().length > 0);
+  assert.ok(nonEmpty.length > 0, 'dashboard HTML should contain an inline <script>');
+  return nonEmpty[nonEmpty.length - 1][1];
 }
 
 /** Build a fresh sandbox, run the dashboard script + epilogue, return handle. */
@@ -174,8 +262,18 @@ function loadDashboard() {
   };
   const sandbox = {
     document,
-    window: { addEventListener: () => {}, document },
+    window: {
+      addEventListener: () => {},
+      document,
+      SIX_EYES_CONFIG: {
+        MAPBOX_ACCESS_TOKEN: 'test-mapbox-token',
+        WS_URL: 'ws://localhost:8765',
+        INITIAL_MAP_CENTER: [-118.2437, 34.0522],
+      },
+    },
     WebSocket: MockWebSocket,
+    mapboxgl: mapboxglMock,
+    MapboxDraw: MockMapboxDraw,
     setInterval: () => 0,
     clearInterval: () => {},
     setTimeout: () => 0, // never fire reconnect / hint-reset timers
@@ -202,15 +300,21 @@ function openSocket(handle) {
   return sock;
 }
 
-/** Simulate the operator clicking the map to drop polygon vertices. */
-function drawPolygon(handle, points = CLICK_PTS) {
-  assert.ok(handle.mapEl, 'expected the map (canvas.parentElement) to be wired for clicks');
-  points.forEach((p) => handle.mapEl._fire('click', p));
+/**
+ * Simulate the operator drawing a polygon with the Mapbox Draw control: stage
+ * the geometry on the draw instance, then fire the 'draw.create' map event the
+ * dashboard listens on (which refreshes the deploy controls).
+ */
+function drawPolygon(handle, coords = POLY_LNGLAT) {
+  assert.ok(handle.draw, 'expected a MapboxDraw instance (global `draw`)');
+  assert.ok(handle.map, 'expected the Mapbox map (global `map`)');
+  handle.draw._setPolygon(coords);
+  handle.map._fire('draw.create');
 }
 
-// `missionPolygon` lives in the vm realm, so its Array.prototype differs from
-// the test realm and deepStrictEqual would reject identical-looking arrays.
-// Normalize through JSON (matches how it actually goes over the wire anyway).
+// Values cross the vm realm boundary, so Array.prototype differs and
+// deepStrictEqual would reject identical-looking arrays. Normalize through JSON
+// (matches how it actually goes over the wire anyway).
 const norm = (v) => JSON.parse(JSON.stringify(v));
 
 // --------------------------------------------------------------------------- //
@@ -220,6 +324,12 @@ test('harness: the dashboard script executes in the mock DOM', () => {
   const handle = loadDashboard();
   assert.ok(handle, 'epilogue should expose a test handle');
   assert.ok(handle.ws instanceof MockWebSocket, 'connect() should open a socket');
+  assert.ok(handle.draw instanceof MockMapboxDraw, 'a MapboxDraw control should be created');
+});
+
+test('config: the Mapbox map starts from runtime drone base center, not Irvine', () => {
+  const handle = loadDashboard();
+  assert.deepEqual(norm(handle.map.opts.center), [-118.2437, 34.0522]);
 });
 
 // --------------------------------------------------------------------------- //
@@ -248,38 +358,45 @@ test('UI: the deploy button uses the black/purple design system, not raw default
 });
 
 // --------------------------------------------------------------------------- //
-// 2. Polygon extraction — map clicks build `missionPolygon`
+// 2. Polygon extraction — Mapbox Draw geometry -> [lng, lat] ring
 // --------------------------------------------------------------------------- //
-test('extraction: a map click drops a [x, y] vertex in SIM_WORLD coords', () => {
+test('config: the Mapbox Draw control is restricted to draw_polygon only', () => {
   const handle = loadDashboard();
-  assert.ok(handle.missionPolygon, 'expected a global missionPolygon array');
-  assert.equal(handle.missionPolygon.length, 0, 'starts empty before any click');
-  drawPolygon(handle, [CLICK_PTS[0]]);
-  assert.deepEqual(norm(handle.missionPolygon), [EXPECTED_POLY[0]]);
+  assert.ok(handle.draw, 'expected a MapboxDraw instance');
+  const opts = norm(handle.draw.opts) || {};
+  assert.equal(opts.displayControlsDefault, false, 'must not show the default control set');
+  assert.ok(opts.controls && opts.controls.polygon === true, 'polygon control must be enabled');
+  // No line/point tools, and the trash control is left off (CLEAR drives delete).
+  for (const k of ['line_string', 'point', 'trash', 'combine_features', 'uncombine_features']) {
+    assert.notEqual(opts.controls[k], true, `control "${k}" must not be enabled`);
+  }
 });
 
-test('extraction: vertices accumulate in click order', () => {
+test('extraction: getMissionPolygon() returns the drawn ring as [lng, lat], unclosed', () => {
   const handle = loadDashboard();
+  assert.ok(handle.getMissionPolygon, 'expected a global getMissionPolygon()');
+  assert.deepEqual(norm(handle.getMissionPolygon()), [], 'empty before anything is drawn');
   drawPolygon(handle);
-  assert.deepEqual(norm(handle.missionPolygon), EXPECTED_POLY);
+  // The GeoJSON closing vertex (== first) must be dropped: 3 in -> 3 out.
+  assert.deepEqual(norm(handle.getMissionPolygon()), POLY_LNGLAT);
 });
 
 test('controls: DEPLOY is disabled below 3 vertices and enabled at 3', () => {
   const handle = loadDashboard();
   assert.ok(handle.deployBtn, 'expected deploySwarmBtn');
-  drawPolygon(handle, CLICK_PTS.slice(0, 2)); // 2 vertices
+  drawPolygon(handle, POLY_LNGLAT.slice(0, 2)); // 2 vertices
   assert.equal(handle.deployBtn.disabled, true, 'still disabled with 2 vertices');
-  drawPolygon(handle, CLICK_PTS.slice(2)); // 3rd vertex
+  drawPolygon(handle, POLY_LNGLAT); // 3 vertices
   assert.equal(handle.deployBtn.disabled, false, 'enabled once a polygon (3 pts) exists');
 });
 
-test('controls: CLEAR empties the polygon', () => {
+test('controls: CLEAR empties the drawn polygon', () => {
   const handle = loadDashboard();
   assert.ok(handle.clearBtn, 'expected clearPolygonBtn');
   drawPolygon(handle);
-  assert.equal(handle.missionPolygon.length, 3);
+  assert.equal(handle.getMissionPolygon().length, 3);
   handle.clearBtn._fire('click');
-  assert.equal(handle.missionPolygon.length, 0, 'CLEAR should reset the drawn polygon');
+  assert.equal(handle.getMissionPolygon().length, 0, 'CLEAR should reset the drawn polygon');
 });
 
 // --------------------------------------------------------------------------- //
@@ -304,10 +421,10 @@ test('transmit: deploySwarm() sends one strict START_MISSION frame over an open 
     'payload must contain ONLY "command" and "polygon" (strict schema)'
   );
   assert.equal(parsed.command, 'START_MISSION');
-  assert.deepEqual(parsed.polygon, EXPECTED_POLY);
+  assert.deepEqual(parsed.polygon, POLY_LNGLAT);
 });
 
-test('transmit: sent polygon is an array of [number, number] pairs', () => {
+test('transmit: sent polygon is an array of [lng, lat] number pairs', () => {
   const handle = loadDashboard();
   const sock = openSocket(handle);
   drawPolygon(handle);
@@ -327,13 +444,13 @@ test('transmit: clicking the wired button triggers the same send', () => {
   drawPolygon(handle);
   handle.deployBtn._fire('click');
   assert.equal(sock.sent.length, 1, 'a click on DEPLOY should send one START_MISSION frame');
-  assert.deepEqual(JSON.parse(sock.sent[0]), { command: 'START_MISSION', polygon: EXPECTED_POLY });
+  assert.deepEqual(JSON.parse(sock.sent[0]), { command: 'START_MISSION', polygon: POLY_LNGLAT });
 });
 
 test('transmit: deploySwarm() does NOT send with fewer than 3 vertices', () => {
   const handle = loadDashboard();
   const sock = openSocket(handle);
-  drawPolygon(handle, CLICK_PTS.slice(0, 2)); // only 2 vertices
+  drawPolygon(handle, POLY_LNGLAT.slice(0, 2)); // only 2 vertices
   handle.deploySwarm();
   assert.equal(sock.sent.length, 0, 'a 2-point line is not a deployable polygon');
 });

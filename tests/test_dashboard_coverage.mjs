@@ -70,7 +70,7 @@ function makeClassList() {
 function makeEl(id = '') {
   const el = {
     id,
-    style: {},
+    style: { setProperty() {} },
     classList: makeClassList(),
     textContent: '',
     innerHTML: '',
@@ -99,6 +99,7 @@ function makeCanvas(id, wrap) {
 
 function buildSandbox() {
   const elements = {};
+  const markerInstances = [];
   // Shared map-wrap parent for both canvases; the script reads clientWidth/Height.
   const wrap = makeEl('map-wrap');
   wrap.clientWidth = CANVAS_PX;
@@ -122,10 +123,51 @@ function buildSandbox() {
     send() {}
   }
 
+  class FakeMap {
+    constructor(opts) {
+      this.opts = opts;
+      this._handlers = {};
+      this._sources = {};
+      this._layers = [];
+    }
+    addControl() { return this; }
+    on(ev, fn) { (this._handlers[ev] ||= []).push(fn); return this; }
+    isStyleLoaded() { return true; }
+    getSource(id) { return this._sources[id]; }
+    addSource(id, opts) {
+      this._sources[id] = { data: opts.data, setData(data) { this.data = data; } };
+      return this;
+    }
+    addLayer(layer) { this._layers.push(layer); return this; }
+  }
+
+  class FakeMapboxDraw {
+    constructor(opts) { this.opts = opts; this._features = []; }
+    getAll() { return { type: 'FeatureCollection', features: this._features }; }
+    deleteAll() { this._features = []; }
+  }
+
   const sandbox = {
     document,
-    window: { addEventListener() {} },
+    window: {
+      addEventListener() {},
+      SIX_EYES_CONFIG: {
+        MAPBOX_ACCESS_TOKEN: 'test-mapbox-token',
+        WS_URL: 'ws://localhost:8765',
+      },
+    },
     WebSocket: FakeWebSocket,
+    mapboxgl: {
+      accessToken: '',
+      Map: FakeMap,
+      NavigationControl: class {},
+      Marker: class {
+        constructor(opts) { this.opts = opts; markerInstances.push(this); }
+        setLngLat(lngLat) { this.lngLat = lngLat; return this; }
+        addTo(map) { this.map = map; return this; }
+      },
+    },
+    MapboxDraw: FakeMapboxDraw,
     requestAnimationFrame() { return 0; }, // no-op: don't recurse renderLoop
     setInterval() { return 0; },
     setTimeout() { return 0; },
@@ -133,6 +175,7 @@ function buildSandbox() {
     console, JSON, Math, Date, Object, Number, String, Array, Set,
     parseInt, parseFloat, isNaN,
     _elements: elements, // test-only escape hatch
+    _markerInstances: markerInstances,
   };
   sandbox.globalThis = sandbox;
   return sandbox;
@@ -140,8 +183,10 @@ function buildSandbox() {
 
 function loadDashboard() {
   const html = readFileSync(HTML_PATH, 'utf8');
-  const m = html.match(/<script>([\s\S]*?)<\/script>/);
-  if (!m) throw new Error('no <script> block found in dashboard HTML');
+  const matches = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)];
+  const nonEmpty = matches.filter((m) => m[1].trim().length > 0);
+  const m = nonEmpty.at(-1);
+  if (!m) throw new Error('no inline <script> block found in dashboard HTML');
   const sandbox = buildSandbox();
   vm.createContext(sandbox);
   vm.runInContext(m[1], sandbox, { filename: 'six_eyes_dashboard.inline.js' });
@@ -155,6 +200,7 @@ function fresh() {
     s,
     zoneText: () => s._elements['zoneCoverage'].textContent,
     coverageArcs: () => s._elements['coverage-canvas']._ctx.arcs,
+    mapCtx: () => s._elements['map-canvas']._ctx,
     coverageCtx: () => s._elements['coverage-canvas']._ctx,
   };
 }
@@ -268,9 +314,9 @@ test('T1: out-of-range sim coords map off-canvas (documents F-T1-1)', () => {
   assert.ok(s.mapToCanvasX(100) < CANVAS_PX * 0.2, '100/1000 sim x crams into the left 20%');
 });
 
-// SHORTCOMING (F-T1-2): the heatmap canvas does NOT flip the Y axis, while the
-// live GPS map (project()) does. So a footprint and the GPS dot for the same
-// world point sit on opposite vertical halves. Pinned here.
+// SHORTCOMING (F-T1-2): the legacy heatmap canvas does NOT flip the Y axis. The
+// old canvas GPS overlay did, so this remains pinned for the retained legacy
+// nav-telemetry coverage buffer.
 test('T1: heatmap Y is not flipped vs the GPS map (documents F-T1-2)', () => {
   const { s } = fresh();
   // Sim y=0 maps to canvas y=0 (top). A flipped/consistent map would put low y
@@ -296,6 +342,26 @@ test('router: handleNavTelemetry both paints AND advances the stat', () => {
   s.handleNavTelemetry({ drone_id: 'drone_1', x: 500, y: 500, current_waypoint_idx: 5, waypoints_remaining: 5 });
   assert.equal(coverageArcs().length - before, 1, 'painted a footprint');
   assert.equal(zoneText(), '50% SEARCHED', 'and updated the stat');
+});
+
+test('router: full packet detection is shown on the Mapbox marker, not canvas overlay', () => {
+  const { s, mapCtx } = fresh();
+  const mapArcsBefore = mapCtx().arcs.length;
+
+  s.handlePacket({
+    drone_id: 'DRONE_1',
+    gps: { lat: 33.68, lng: -117.82, lon: -117.82, alt: 75 },
+    health: { battery: 91, signal: 'STRONG', status: 'ONLINE', speed_ms: 12, temp_c: 40 },
+    detections: [{ class: 'person', confidence: 0.92, bbox: [1, 2, 3, 4] }],
+    mission: { zone: 'ALPHA', coverage_pct: 10, elapsed_s: 1 },
+  });
+  s.drawMap();
+
+  assert.equal(s._markerInstances.length, 1, 'full GPS packet should create exactly one Mapbox marker');
+  assert.deepEqual(JSON.parse(JSON.stringify(s._markerInstances[0].lngLat)), [-117.82, 33.68]);
+  const markerDot = s._markerInstances[0].opts.element.children[0];
+  assert.equal(markerDot.classList.contains('detected'), true, 'human detection should live on Mapbox marker');
+  assert.equal(mapCtx().arcs.length, mapArcsBefore, 'legacy canvas overlay must not draw duplicate drone dots/rings');
 });
 
 // =========================================================================== //

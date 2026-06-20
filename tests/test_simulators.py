@@ -10,7 +10,9 @@ def test_gps_within_bounds_of_base():
         gps = simulate_gps(drone_id)
         # Amplitudes are <= ~0.004 deg, so lat/lon stay close to base.
         assert abs(gps["lat"] - config.BASE_LAT) < 0.01
+        assert abs(gps["lng"] - config.BASE_LON) < 0.01
         assert abs(gps["lon"] - config.BASE_LON) < 0.01
+        assert gps["lng"] == gps["lon"]
         assert 65 <= gps["alt"] <= 85
 
 

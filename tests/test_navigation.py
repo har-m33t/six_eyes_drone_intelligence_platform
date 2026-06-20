@@ -26,6 +26,8 @@ import threading
 import pytest
 
 nav_mod = pytest.importorskip("src.navigation")
+from src import config  # noqa: E402
+
 WaypointNavigator = getattr(nav_mod, "WaypointNavigator", None)
 if WaypointNavigator is None:
     pytest.skip(
@@ -269,6 +271,20 @@ def test_long_route_completes_in_bounded_ticks():
     assert last["mission_complete"] is True, "10k-waypoint route did not finish in budget"
     assert last["waypoints_remaining"] == 0
     assert last["current_waypoint_idx"] == len(route)
+
+
+def test_default_speed_auto_paces_small_lnglat_routes(monkeypatch):
+    monkeypatch.setattr(config, "NAV_GEO_ROUTE_DURATION_S", 60.0)
+    route = [(-117.83, 33.67), (-117.81, 33.67), (-117.81, 33.69)]
+    expected_length = math.hypot(0.02, 0.0) + math.hypot(0.0, 0.02)
+
+    nav = WaypointNavigator(route)
+
+    assert nav.speed == pytest.approx(expected_length / 60.0)
+    nav.activate()
+    t = nav.tick(1.0)
+    assert t["mission_complete"] is False
+    assert (nav.x, nav.y) != route[-1]
 
 
 def test_monotonic_counters_over_full_flight():
