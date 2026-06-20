@@ -20,6 +20,7 @@ See `.claude/dashboard_coverage_review.md` for the full write-up.
 """
 import dataclasses
 import pathlib
+import time
 
 import pytest
 
@@ -119,7 +120,19 @@ def test_main_registers_mission_handler_before_websocket_serves(monkeypatch):
     monkeypatch.setattr(runtime, "DualSinkSender", lambda _loop: DummySender())
     monkeypatch.setattr(runtime, "warmup", lambda: None)
     monkeypatch.setattr(runtime, "launch_producers", lambda _sender: [])
-    monkeypatch.setattr(runtime.config, "MISSION_DURATION_S", 0)
+
+    # main() now streams forever (while True: time.sleep(1)). Let the short
+    # server-bind sleep through so the WS thread can record the handler, then
+    # break out of the streaming loop by raising KeyboardInterrupt on its
+    # one-second tick — exactly how an operator's Ctrl+C ends the mission.
+    real_sleep = time.sleep
+
+    def fake_sleep(secs):
+        if secs >= 1:
+            raise KeyboardInterrupt
+        real_sleep(secs)
+
+    monkeypatch.setattr(runtime.time, "sleep", fake_sleep)
 
     ws.set_mission_handler(None)
     try:
