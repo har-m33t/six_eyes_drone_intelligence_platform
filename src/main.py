@@ -16,7 +16,6 @@ import time
 # relative `from . import config` raises ImportError.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src import config
 from src.inference import warmup
 from src.producer import inject_mission, launch_producers, reset_navigators
 from src.transport.foundry_client import DualSinkSender
@@ -55,8 +54,13 @@ def main():
     launch_producers(sender)
     print("[main] Six drone producers running. Awaiting DEPLOY SWARM. Ctrl+C to stop.")
 
+    # Run indefinitely: the producer threads loop their MP4 feeds forever, so the
+    # main thread just needs to stay alive and keep streaming until the operator
+    # interrupts. (Previously this slept for MISSION_DURATION_S and then exited,
+    # which tore down the producers and stopped the live feed mid-demo.)
     try:
-        time.sleep(config.MISSION_DURATION_S)
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
         print("\n[main] Mission ended by operator.")
 
