@@ -63,6 +63,7 @@ class NavTelemetry:
     current_waypoint_idx: int   # waypoints reached so far
     waypoints_remaining: int    # waypoints still ahead on this route
     mission_complete: bool      # whole assigned route flown
+    coverage_active: bool = True  # false while transiting to search start
 
 
 def make_nav_packet(drone_id: str, telemetry: dict) -> NavTelemetry:
@@ -75,6 +76,7 @@ def make_nav_packet(drone_id: str, telemetry: dict) -> NavTelemetry:
         current_waypoint_idx=telemetry["current_waypoint_idx"],
         waypoints_remaining=telemetry["waypoints_remaining"],
         mission_complete=telemetry["mission_complete"],
+        coverage_active=telemetry.get("coverage_active", True),
     )
 
 
