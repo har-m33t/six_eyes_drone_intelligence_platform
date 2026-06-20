@@ -166,12 +166,32 @@ def test_inject_mission_maps_lowercase_plan_keys_to_drone_ids():
 
 
 def test_inject_mission_refreshes_existing_navigator_in_place():
-    producer.inject_mission({"drone_1": [(0, 0), (100, 0)]})
+    producer._remember_gps("DRONE_1", {"lng": -117.84, "lat": 33.67, "alt": 75.0})
+    producer.inject_mission({"drone_1": [(-117.83, 33.67), (-117.82, 33.67)]})
     first = producer.get_navigator("DRONE_1")
-    producer.inject_mission({"drone_1": [(500, 500), (600, 500)]})
+    producer.inject_mission({"drone_1": [(-117.81, 33.68), (-117.80, 33.68)]})
     second = producer.get_navigator("DRONE_1")
     assert second is first, "re-deploy should update the same navigator object"
-    assert (second.x, second.y) == (500.0, 500.0)
+    assert (second.x, second.y) == (-117.84, 33.67)
+    assert second.waypoints[0] == (-117.84, 33.67)
+    assert second.waypoints[1] == (-117.81, 33.68)
+    assert second.coverage_start_index == 1
+
+
+def test_transit_to_start_does_not_count_as_coverage():
+    producer._remember_gps("DRONE_1", {"lng": -117.84, "lat": 33.67, "alt": 75.0})
+    producer.inject_mission({"drone_1": [(-117.83, 33.67), (-117.82, 33.67)]})
+    nav = producer.get_navigator("DRONE_1")
+
+    raw = nav.tick(1.0)
+    telemetry = producer._mission_telemetry(nav, raw)
+    gps = producer._gps_from_nav_telemetry(telemetry)
+
+    assert telemetry["current_waypoint_idx"] == 0
+    assert telemetry["waypoints_remaining"] == 2
+    assert telemetry["coverage_active"] is False
+    assert gps["coverage_active"] is False
+    assert -117.84 < gps["lng"] < -117.83
 
 
 def test_inject_mission_ignores_unknown_drone_keys():
