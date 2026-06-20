@@ -121,6 +121,9 @@ NAV_GEO_TRANSIT_SPEED_DEG_S = float(os.getenv("NAV_GEO_TRANSIT_SPEED_DEG_S", "0.
 NAV_BROADCAST_EVERY_N = int(os.getenv("NAV_BROADCAST_EVERY_N", "3"))
 
 # --- Mission ----------------------------------------------------------------
+# Vestigial: main.py now streams continuously until Ctrl+C, so this no longer
+# bounds the run. Retained for backward compatibility and any external tooling
+# (e.g. a Foundry mission-summary transform) that still reads it.
 MISSION_DURATION_S = int(os.getenv("MISSION_DURATION_S", "600"))
 
 
