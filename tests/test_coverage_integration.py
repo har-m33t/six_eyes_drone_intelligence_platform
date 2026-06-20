@@ -44,6 +44,17 @@ def test_planner_emits_json_safe_xy_waypoints():
             assert isinstance(x, float) and isinstance(y, float)
 
 
+def test_planner_uses_dense_default_for_mapbox_lnglat_polygon():
+    """Mapbox polygons must use degree-scale spacing, not legacy SIM spacing."""
+    polygon = [(-117.83, 33.67), (-117.81, 33.67), (-117.81, 33.69), (-117.83, 33.69)]
+
+    path = coverage_planner.generate_lawnmower_path(polygon)
+
+    assert len(path) >= 150
+    ys = sorted({round(y, 7) for _, y in path})
+    assert (ys[1] - ys[0]) == pytest.approx(coverage_planner.DEFAULT_GEO_SWEEP_SPACING)
+
+
 def test_asdict_rejects_plain_dict():
     """Documents WHY a nav dict can't ride the existing WS path: broadcast() does
     `asdict(packet)`, and asdict() raises on anything that isn't a dataclass.
@@ -88,3 +99,31 @@ def test_runtime_wires_coverage_planner():
     assert "WaypointNavigator" in producer_src, (
         "producer must fly planned waypoints via the navigator"
     )
+
+
+def test_main_registers_mission_handler_before_websocket_serves(monkeypatch):
+    """An early dashboard deploy must not be planned and then dropped because
+    the WebSocket server started before producer.inject_mission was registered."""
+    from src import main as runtime
+    from src.transport import websocket_server as ws
+
+    observed_handlers = []
+
+    async def fake_serve_forever():
+        observed_handlers.append(ws._mission_handler)
+
+    class DummySender:
+        foundry_enabled = False
+
+    monkeypatch.setattr(runtime, "serve_forever", fake_serve_forever)
+    monkeypatch.setattr(runtime, "DualSinkSender", lambda _loop: DummySender())
+    monkeypatch.setattr(runtime, "warmup", lambda: None)
+    monkeypatch.setattr(runtime, "launch_producers", lambda _sender: [])
+    monkeypatch.setattr(runtime.config, "MISSION_DURATION_S", 0)
+
+    ws.set_mission_handler(None)
+    try:
+        runtime.main()
+        assert observed_handlers == [runtime.inject_mission]
+    finally:
+        ws.set_mission_handler(None)

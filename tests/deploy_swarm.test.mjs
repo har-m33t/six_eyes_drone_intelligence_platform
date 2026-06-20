@@ -23,7 +23,8 @@
  * ---------------------------------------------------------------------------
  * Observed Task 2 contract (what these tests pin to the implementation):
  *   - <button id="deploySwarmBtn">DEPLOY SWARM</button> (+ a CLEAR button).
- *   - `draw` : a MapboxDraw instance added to the map, restricted to polygon.
+ *   - `draw` : a MapboxDraw instance added to the map, restricted to polygon
+ *     and trash controls.
  *   - `getMissionPolygon()` : returns the drawn polygon's outer ring as
  *     `[lng, lat]` vertices with the GeoJSON closing vertex dropped.
  *   - `refreshDeployControls()` (fired on draw.create/update/delete) enables
@@ -207,12 +208,17 @@ class MockMapboxDraw {
   constructor(opts) {
     this.opts = opts;
     this._features = [];
+    this.modeChanges = [];
   }
   getAll() {
     return { type: 'FeatureCollection', features: this._features };
   }
   deleteAll() {
     this._features = [];
+    return this;
+  }
+  changeMode(mode) {
+    this.modeChanges.push(mode);
     return this;
   }
   // Test helper: stage a drawn polygon from [[lng,lat], ...], auto-closing the
@@ -235,6 +241,7 @@ const EPILOGUE = `
   getMissionPolygon: (typeof getMissionPolygon === 'function') ? getMissionPolygon : null,
   draw: (typeof draw !== 'undefined') ? draw : null,
   map: (typeof map !== 'undefined') ? map : null,
+  drawBtn: (typeof drawPolygonBtn !== 'undefined') ? drawPolygonBtn : null,
   deployBtn: (typeof deploySwarmBtn !== 'undefined') ? deploySwarmBtn : null,
   clearBtn: (typeof clearPolygonBtn !== 'undefined') ? clearPolygonBtn : null,
 };
@@ -251,7 +258,7 @@ function extractScript(html) {
 }
 
 /** Build a fresh sandbox, run the dashboard script + epilogue, return handle. */
-function loadDashboard() {
+function loadDashboard({ withMapboxDraw = true } = {}) {
   const ctx = makeCtx();
   const registry = {};
   const document = {
@@ -273,7 +280,7 @@ function loadDashboard() {
     },
     WebSocket: MockWebSocket,
     mapboxgl: mapboxglMock,
-    MapboxDraw: MockMapboxDraw,
+    MapboxDraw: withMapboxDraw ? MockMapboxDraw : undefined,
     setInterval: () => 0,
     clearInterval: () => {},
     setTimeout: () => 0, // never fire reconnect / hint-reset timers
@@ -310,6 +317,12 @@ function drawPolygon(handle, coords = POLY_LNGLAT) {
   assert.ok(handle.map, 'expected the Mapbox map (global `map`)');
   handle.draw._setPolygon(coords);
   handle.map._fire('draw.create');
+}
+
+function fallbackClickPolygon(handle, coords = POLY_LNGLAT) {
+  assert.ok(handle.map, 'expected the Mapbox map (global `map`)');
+  handle.drawBtn._fire('click');
+  coords.forEach(([lng, lat]) => handle.map._fire('click', { lngLat: { lng, lat } }));
 }
 
 // Values cross the vm realm boundary, so Array.prototype differs and
@@ -349,6 +362,14 @@ test('UI: the deploy button is wired via id="deploySwarmBtn"', () => {
   assert.ok(handle.deployBtn, 'deploySwarmBtn should be resolvable via getElementById');
 });
 
+test('UI: a visible DRAW AREA button starts polygon drawing mode', () => {
+  assert.match(HTML, /id\s*=\s*["']drawPolygonBtn["']/i);
+  const handle = loadDashboard();
+  assert.ok(handle.drawBtn, 'drawPolygonBtn should be resolvable via getElementById');
+  handle.drawBtn._fire('click');
+  assert.deepEqual(handle.draw.modeChanges, ['draw_polygon']);
+});
+
 test('UI: the deploy button uses the black/purple design system, not raw defaults', () => {
   const btn = HTML.match(/<button\b[^>]*>[\s\S]*?DEPLOY\s*SWARM[\s\S]*?<\/button>/i);
   assert.ok(btn, 'deploy button must exist before its styling can be checked');
@@ -360,14 +381,15 @@ test('UI: the deploy button uses the black/purple design system, not raw default
 // --------------------------------------------------------------------------- //
 // 2. Polygon extraction — Mapbox Draw geometry -> [lng, lat] ring
 // --------------------------------------------------------------------------- //
-test('config: the Mapbox Draw control is restricted to draw_polygon only', () => {
+test('config: the Mapbox Draw control is restricted to polygon and trash only', () => {
   const handle = loadDashboard();
   assert.ok(handle.draw, 'expected a MapboxDraw instance');
   const opts = norm(handle.draw.opts) || {};
   assert.equal(opts.displayControlsDefault, false, 'must not show the default control set');
   assert.ok(opts.controls && opts.controls.polygon === true, 'polygon control must be enabled');
-  // No line/point tools, and the trash control is left off (CLEAR drives delete).
-  for (const k of ['line_string', 'point', 'trash', 'combine_features', 'uncombine_features']) {
+  assert.ok(opts.controls && opts.controls.trash === true, 'trash control must be enabled');
+  // No line/point tools or advanced feature-combine controls.
+  for (const k of ['line_string', 'point', 'combine_features', 'uncombine_features']) {
     assert.notEqual(opts.controls[k], true, `control "${k}" must not be enabled`);
   }
 });
@@ -379,6 +401,19 @@ test('extraction: getMissionPolygon() returns the drawn ring as [lng, lat], uncl
   drawPolygon(handle);
   // The GeoJSON closing vertex (== first) must be dropped: 3 in -> 3 out.
   assert.deepEqual(norm(handle.getMissionPolygon()), POLY_LNGLAT);
+});
+
+test('fallback: DRAW AREA still captures a deployable polygon if MapboxDraw is unavailable', () => {
+  const handle = loadDashboard({ withMapboxDraw: false });
+  const sock = openSocket(handle);
+
+  assert.equal(handle.draw, null, 'MapboxDraw should be absent in this fixture');
+  fallbackClickPolygon(handle);
+
+  assert.deepEqual(norm(handle.getMissionPolygon()), POLY_LNGLAT);
+  assert.equal(handle.deployBtn.disabled, false, 'fallback polygon enables DEPLOY');
+  handle.deploySwarm();
+  assert.deepEqual(JSON.parse(sock.sent[0]), { command: 'START_MISSION', polygon: POLY_LNGLAT });
 });
 
 test('controls: DEPLOY is disabled below 3 vertices and enabled at 3', () => {

@@ -185,6 +185,20 @@ def test_inject_mission_never_raises_on_garbage_plan():
     assert producer.inject_mission({}) == 0
 
 
+def test_inject_mission_rejects_non_finite_waypoints():
+    armed = producer.inject_mission({"drone_1": [(float("nan"), 0.0), (1.0, 1.0)]})
+    assert armed == 0
+    assert producer.get_navigator("DRONE_1") is None
+
+
+def test_pre_mission_gps_holds_fixed_hover_position():
+    first = producer._hover_gps("DRONE_1")
+    second = producer._hover_gps("DRONE_1")
+    assert first == second
+    assert first["lng"] == first["lon"]
+    assert first["lat"] == pytest.approx(config.BASE_LAT)
+
+
 # --------------------------------------------------------------------------- #
 # End to end: START_MISSION frame -> router -> planner -> navigators
 # --------------------------------------------------------------------------- #
