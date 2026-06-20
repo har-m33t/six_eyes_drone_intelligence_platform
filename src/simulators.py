@@ -11,9 +11,12 @@ from . import config
 def simulate_gps(drone_id: str) -> dict:
     elapsed = time.time() - config.MISSION_START
     p = config.DRONE_PATTERNS[drone_id]
+    lat = round(config.BASE_LAT + p["lat_amp"] * math.sin(elapsed * p["lat_freq"]), 6)
+    lng = round(config.BASE_LON + p["lon_amp"] * math.cos(elapsed * p["lon_freq"]), 6)
     return {
-        "lat": round(config.BASE_LAT + p["lat_amp"] * math.sin(elapsed * p["lat_freq"]), 6),
-        "lon": round(config.BASE_LON + p["lon_amp"] * math.cos(elapsed * p["lon_freq"]), 6),
+        "lat": lat,
+        "lng": lng,
+        "lon": lng,  # backwards-compatible alias for older dashboard/tests
         "alt": round(75 + random.uniform(-5, 5), 1),
     }
 

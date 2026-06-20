@@ -17,21 +17,22 @@ class DronePacket:
     timestamp: float         # Unix timestamp (time.time())
     frame_idx: int           # Frame number since mission start (video sync)
     detections: list         # List of {class, confidence, bbox} dicts
-    gps: dict                # {lat, lon, alt}
+    gps: dict                # {lat, lng, lon, alt}; lon kept as compatibility alias
     health: dict             # {battery, signal, status, speed_ms, temp_c}
     mission: dict = field(default_factory=dict)  # {zone, coverage_pct, elapsed_s}
     frame_b64: str = None     # base64 JPEG of the frame (dashboard video); WS-only
 
 
 def build_packet(drone_id: str, frame_idx: int, detections: list,
-                 frame_b64: str = None) -> DronePacket:
+                 frame_b64: str = None, gps_override: dict = None) -> DronePacket:
     elapsed = time.time() - config.MISSION_START
+    gps = gps_override if gps_override is not None else simulate_gps(drone_id)
     return DronePacket(
         drone_id=drone_id,
         timestamp=time.time(),
         frame_idx=frame_idx,
         detections=detections,
-        gps=simulate_gps(drone_id),
+        gps=gps,
         health=simulate_health(drone_id, frame_idx),
         mission={
             "zone": config.assign_zone(drone_id),
@@ -45,8 +46,10 @@ def build_packet(drone_id: str, frame_idx: int, detections: list,
 # --- Navigation telemetry ---------------------------------------------------
 # A second, lightweight wire packet broadcast once a drone is flying its Deploy
 # Swarm route (Task 3). It is intentionally distinct from DronePacket: it carries
-# raw SIM_WORLD (x, y) sweep coordinates + waypoint progress and NO gps/health/
-# detections. The dashboard routes on exactly that shape — see isNavTelemetry()
+# route-local (x, y) sweep coordinates + waypoint progress and NO gps/health/
+# detections. For Mapbox missions, x/y are lng/lat internally; the main
+# DronePacket.gps carries those as lng/lat for the visible marker/coverage path.
+# The dashboard routes on exactly that shape — see isNavTelemetry()
 # in six_eyes_dashboard.html (keys on `current_waypoint_idx` / x+y without gps) —
 # to paint the coverage footprint and the live "% SEARCHED" stat. Same asdict()
 # -> JSON broadcast path as DronePacket, so the transport is untouched.
@@ -55,8 +58,8 @@ def build_packet(drone_id: str, frame_idx: int, detections: list,
 class NavTelemetry:
     drone_id: str            # "DRONE_1" through "DRONE_6"
     timestamp: float         # Unix timestamp (time.time())
-    x: float                 # SIM_WORLD x of the drone along its sweep
-    y: float                 # SIM_WORLD y of the drone along its sweep
+    x: float                 # route x; lng for Mapbox-drawn missions
+    y: float                 # route y; lat for Mapbox-drawn missions
     current_waypoint_idx: int   # waypoints reached so far
     waypoints_remaining: int    # waypoints still ahead on this route
     mission_complete: bool      # whole assigned route flown
@@ -109,11 +112,12 @@ class DetectionRow:
 def make_telemetry_row(drone_id: str, timestamp: float, gps: dict,
                        health: dict, mission: dict) -> dict:
     """Build a flat telemetry row (plain dict) from data already on the packet."""
+    lng = gps.get("lng", gps.get("lon"))
     return asdict(TelemetryRow(
         drone_id=drone_id,
         timestamp=timestamp,
         lat=gps["lat"],
-        lon=gps["lon"],
+        lon=lng,
         alt=gps["alt"],
         battery=health["battery"],
         signal=health["signal"],
@@ -127,11 +131,12 @@ def make_telemetry_row(drone_id: str, timestamp: float, gps: dict,
 def make_detection_row(drone_id: str, timestamp: float, confidence: float,
                        gps: dict) -> dict:
     """Build a flat detection row (plain dict) with a fresh uuid4 detection_id."""
+    lng = gps.get("lng", gps.get("lon"))
     return asdict(DetectionRow(
         detection_id=str(uuid.uuid4()),
         drone_id=drone_id,
         timestamp=timestamp,
         confidence=confidence,
         lat=gps["lat"],
-        lon=gps["lon"],
+        lon=lng,
     ))
