@@ -29,6 +29,12 @@ def _run_ws_loop(loop):
 
 
 def main():
+    # Register the Deploy Swarm handler before the socket accepts any inbound
+    # frames. If the dashboard sends START_MISSION during model warmup, the
+    # router must inject the plan instead of logging "no handler registered".
+    reset_navigators()
+    set_mission_handler(inject_mission)
+
     # Run the asyncio WebSocket server in a dedicated thread and hand its loop
     # to the (synchronous) producer threads via run_coroutine_threadsafe.
     ws_loop = asyncio.new_event_loop()
@@ -45,13 +51,6 @@ def main():
     print("[main] Loading detection model...")
     warmup()
     print("[main] Model ready.")
-
-    # Wire the Deploy Swarm seam: a START_MISSION frame from the dashboard is
-    # planned by the WS router (Task 2) and handed to inject_mission (Task 3),
-    # which arms the running producer threads with their waypoint routes. Start
-    # from a clean (paused) navigator registry so a re-run never inherits state.
-    reset_navigators()
-    set_mission_handler(inject_mission)
 
     launch_producers(sender)
     print("[main] Six drone producers running. Awaiting DEPLOY SWARM. Ctrl+C to stop.")
