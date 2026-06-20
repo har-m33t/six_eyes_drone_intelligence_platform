@@ -32,6 +32,7 @@ from typing import Dict, List, Optional, Tuple
 # default — while a (lng, lat) polygon a few hundredths of a degree tall gets a
 # correspondingly tiny spacing instead of collapsing to a single sweep.
 DEFAULT_SWEEP_ROWS = 5
+DEFAULT_GEO_SWEEP_SPACING = 0.0002
 
 import numpy as np
 from shapely.geometry import (
@@ -46,6 +47,19 @@ from shapely.geometry.base import BaseGeometry
 # signatures read clearly and stay strictly typed.
 Waypoint = Tuple[float, float]
 Path = List[Waypoint]
+
+
+def _looks_like_lnglat_polygon(points: List[Waypoint]) -> bool:
+    """Detect Mapbox [lng, lat] polygons without misclassifying local SIM tests."""
+    if not points:
+        return False
+    xs = [pt[0] for pt in points]
+    ys = [pt[1] for pt in points]
+    if not all(-180 <= x <= 180 for x in xs) or not all(-90 <= y <= 90 for y in ys):
+        return False
+    if max(max(xs) - min(xs), max(ys) - min(ys)) > 1.0:
+        return False
+    return any(abs(x) > 1.0 for x in xs) or any(abs(y) > 1.0 for y in ys)
 
 
 def _extract_line_coords(geometry: BaseGeometry) -> List[Waypoint]:
@@ -157,6 +171,8 @@ def generate_lawnmower_path(
     # didn't pin one — keeps the planner unit-agnostic ((x, y) or (lng, lat)).
     if sweep_spacing is None:
         sweep_spacing = (max_y - min_y) / DEFAULT_SWEEP_ROWS
+        if _looks_like_lnglat_polygon(polygon_coords):
+            sweep_spacing = min(sweep_spacing, DEFAULT_GEO_SWEEP_SPACING)
 
     # 3. Generate the Y-altitudes for each horizontal sweep line. We start half
     #    a spacing *inside* the bottom edge so the first/last lines sit within
