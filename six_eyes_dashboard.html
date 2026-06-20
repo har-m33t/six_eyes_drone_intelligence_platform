@@ -672,11 +672,14 @@ function updateDroneMarker(id, lng, lat, status, hasDetection = false) {
 // layers), so it reads as the footprint beneath the live drones.
 const COVERAGE_SOURCE_ID = 'coverage-source';
 const COVERAGE_LAYER_ID = 'coverage-layer';
+const COVERAGE_INTERPOLATION_STEP_DEGREES = 0.00002;
+const COVERAGE_MAX_INTERPOLATED_POINTS = 160;
 
 // Accumulation buffer: a FeatureCollection we keep appending to and re-push via
 // setData(). Never cleared per-tick, so overlapping translucent circles build
 // into the permanent, interactive search trail.
 const coverageGeoJSON = { type: 'FeatureCollection', features: [] };
+const coverageLastByDrone = {}; // drone_id -> { lng, lat }
 
 // Register the empty source + circle layer once the base style has loaded.
 // Idempotent so a style reload (setStyle) can safely re-run it.
@@ -692,29 +695,55 @@ function initCoverageLayer() {
       'circle-color': '#9333EA',   // tactical purple
       'circle-opacity': 0.15,      // low opacity so overlapping footprints accumulate
       'circle-blur': 0.4,          // soft edge → heatmap-like blend rather than hard dots
-      // ~20px ground footprint at the demo zoom (14); scales gently with zoom so
-      // the trail stays readable as the operator zooms in/out.
+      // Scale roughly with zoom so the footprint covers a consistent ground
+      // area. This prevents visible holes from opening as the operator zooms in.
       'circle-radius': [
-        'interpolate', ['linear'], ['zoom'],
-        10, 12,
-        14, 20,
-        18, 36,
+        'interpolate', ['exponential', 2], ['zoom'],
+        10, 3,
+        12, 9,
+        14, 34,
+        16, 136,
+        18, 544,
       ],
     },
   });
 }
 
-// Push one [lng, lat] footprint into the source and repaint via setData().
-// Called on every telemetry tick. Number.isFinite rejects undefined/NaN/Infinity
-// so a malformed packet can never inject a junk coordinate. No-ops until the
-// source exists (i.e. before the style 'load' event has fired).
-function pushCoverage(lng, lat) {
-  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+function appendCoveragePoint(lng, lat) {
   coverageGeoJSON.features.push({
     type: 'Feature',
     geometry: { type: 'Point', coordinates: [lng, lat] },
     properties: {},
   });
+}
+
+// Push this drone's coverage footprints into the source and repaint via
+// setData(). To avoid visual gaps between telemetry packets, interpolate points
+// along the segment from the drone's previous GPS coordinate to its current
+// coordinate. Number.isFinite rejects undefined/NaN/Infinity so a malformed
+// packet can never inject a junk coordinate.
+function pushCoverage(lng, lat, droneId = null) {
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+
+  const key = droneId || '__global__';
+  const prev = coverageLastByDrone[key];
+  if (prev && Number.isFinite(prev.lng) && Number.isFinite(prev.lat)) {
+    const distLng = lng - prev.lng;
+    const distLat = lat - prev.lat;
+    const distance = Math.hypot(distLng, distLat);
+    const steps = Math.min(
+      COVERAGE_MAX_INTERPOLATED_POINTS,
+      Math.max(1, Math.ceil(distance / COVERAGE_INTERPOLATION_STEP_DEGREES))
+    );
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      appendCoveragePoint(prev.lng + distLng * t, prev.lat + distLat * t);
+    }
+  } else {
+    appendCoveragePoint(lng, lat);
+  }
+  coverageLastByDrone[key] = { lng, lat };
+
   const src = map.getSource(COVERAGE_SOURCE_ID);
   if (src) src.setData(coverageGeoJSON);
 }
@@ -724,6 +753,7 @@ function pushCoverage(lng, lat) {
 // so the trail stays "permanent" per the spec.
 function clearCoverageLayer() {
   coverageGeoJSON.features.length = 0;
+  for (const key of Object.keys(coverageLastByDrone)) delete coverageLastByDrone[key];
   const src = map.getSource(COVERAGE_SOURCE_ID);
   if (src) src.setData(coverageGeoJSON);
 }
@@ -750,7 +780,7 @@ const coverageCtx = coverageCanvas.getContext('2d');
 // into canvas pixels. Set this to match your coverage_planner search-area bounds;
 // 1000 x 1000 is a sane default for the demo's (x, y) waypoint space.
 const SIM_WORLD = { width: 1000, height: 1000 };
-const FOOTPRINT_RADIUS = 20;                       // px field-of-view footprint
+const FOOTPRINT_RADIUS = 32;                       // px field-of-view footprint
 const FOOTPRINT_FILL = 'rgba(147, 51, 234, 0.15)'; // tactical purple, semi-transparent
 
 // Footprints are retained in sim coordinates so a resize can re-rasterize the
@@ -1151,7 +1181,7 @@ function isNavTelemetry(pkt) {
 
 function handleNavTelemetry(pkt) {
   // Task 1: paint a persistent coverage footprint at the drone's position.
-  recordCoverage(pkt.x, pkt.y);
+  if (pkt.coverage_active !== false) recordCoverage(pkt.x, pkt.y);
   // Task 2: fold this drone's waypoint progress into the swarm coverage stat.
   updateCoverageStat(pkt);
 }
@@ -1238,9 +1268,13 @@ function handlePacket(pkt) {
     const hasDetection = Boolean(pkt.detections && pkt.detections.length > 0);
     updateDroneMarker(id, lng, pkt.gps.lat, pkt.health.status, hasDetection);
 
-    // Task 4: drop a coverage footprint at this drone's geographic position,
-    // accumulating the Mapbox search trail underneath the markers.
-    pushCoverage(lng, pkt.gps.lat);
+    // Task 4: drop a coverage footprint only while the drone is actively
+    // sweeping. Transit-to-start GPS packets move the marker but do not paint.
+    if (pkt.gps.coverage_active !== false) {
+      pushCoverage(lng, pkt.gps.lat, id);
+    } else {
+      delete coverageLastByDrone[id];
+    }
     trackInitialDroneMapFocus(id, lng, pkt.gps.lat);
   }
 
