@@ -42,6 +42,39 @@ def build_packet(drone_id: str, frame_idx: int, detections: list,
     )
 
 
+# --- Navigation telemetry ---------------------------------------------------
+# A second, lightweight wire packet broadcast once a drone is flying its Deploy
+# Swarm route (Task 3). It is intentionally distinct from DronePacket: it carries
+# raw SIM_WORLD (x, y) sweep coordinates + waypoint progress and NO gps/health/
+# detections. The dashboard routes on exactly that shape — see isNavTelemetry()
+# in six_eyes_dashboard.html (keys on `current_waypoint_idx` / x+y without gps) —
+# to paint the coverage footprint and the live "% SEARCHED" stat. Same asdict()
+# -> JSON broadcast path as DronePacket, so the transport is untouched.
+
+@dataclass
+class NavTelemetry:
+    drone_id: str            # "DRONE_1" through "DRONE_6"
+    timestamp: float         # Unix timestamp (time.time())
+    x: float                 # SIM_WORLD x of the drone along its sweep
+    y: float                 # SIM_WORLD y of the drone along its sweep
+    current_waypoint_idx: int   # waypoints reached so far
+    waypoints_remaining: int    # waypoints still ahead on this route
+    mission_complete: bool      # whole assigned route flown
+
+
+def make_nav_packet(drone_id: str, telemetry: dict) -> NavTelemetry:
+    """Stamp a navigator's drone-agnostic telemetry dict with identity/time."""
+    return NavTelemetry(
+        drone_id=drone_id,
+        timestamp=time.time(),
+        x=telemetry["x"],
+        y=telemetry["y"],
+        current_waypoint_idx=telemetry["current_waypoint_idx"],
+        waypoints_remaining=telemetry["waypoints_remaining"],
+        mission_complete=telemetry["mission_complete"],
+    )
+
+
 # --- Foundry rows -----------------------------------------------------------
 # Flat, column-shaped rows for the two real Foundry datasets (see
 # .claude/foundary-task.md). These are ADDITIVE and independent of DronePacket

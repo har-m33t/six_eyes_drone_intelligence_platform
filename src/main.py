@@ -18,9 +18,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src import config
 from src.inference import warmup
-from src.producer import launch_producers
+from src.producer import inject_mission, launch_producers, reset_navigators
 from src.transport.foundry_client import DualSinkSender
-from src.transport.websocket_server import serve_forever
+from src.transport.websocket_server import serve_forever, set_mission_handler
 
 
 def _run_ws_loop(loop):
@@ -46,8 +46,15 @@ def main():
     warmup()
     print("[main] Model ready.")
 
+    # Wire the Deploy Swarm seam: a START_MISSION frame from the dashboard is
+    # planned by the WS router (Task 2) and handed to inject_mission (Task 3),
+    # which arms the running producer threads with their waypoint routes. Start
+    # from a clean (paused) navigator registry so a re-run never inherits state.
+    reset_navigators()
+    set_mission_handler(inject_mission)
+
     launch_producers(sender)
-    print("[main] Six drone producers running. Ctrl+C to stop.")
+    print("[main] Six drone producers running. Awaiting DEPLOY SWARM. Ctrl+C to stop.")
 
     try:
         time.sleep(config.MISSION_DURATION_S)

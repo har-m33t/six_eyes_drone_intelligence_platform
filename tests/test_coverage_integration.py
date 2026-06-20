@@ -54,14 +54,11 @@ def test_asdict_rejects_plain_dict():
 
 
 # --------------------------------------------------------------------------- #
-# What's missing: the backend never produces nav telemetry. (Known gaps.)
+# Now wired by Deploy Swarm Task 3 (.claude/deploy-swarm-integration.md). The
+# xfail(strict) markers these tests carried have been removed now that the gap
+# is closed: src/packet.py has a nav-telemetry wire type, and the runtime flies
+# the planned waypoints (WS router -> producer.inject_mission -> navigators).
 # --------------------------------------------------------------------------- #
-@pytest.mark.xfail(
-    strict=True,
-    reason="F-INT-1: no nav-telemetry wire type/builder exists. The dashboard needs "
-    "{drone_id,x,y,current_waypoint_idx,waypoints_remaining,mission_complete}; "
-    "src/packet.py defines no such builder. Remove this marker once one exists.",
-)
 def test_packet_module_exposes_nav_telemetry_builder():
     from src import packet
 
@@ -69,17 +66,25 @@ def test_packet_module_exposes_nav_telemetry_builder():
         packet, "NavTelemetry", None
     )
     assert builder is not None, "no nav-telemetry builder/dataclass in src/packet.py"
+    # It must be a dataclass so the existing broadcast() asdict() path accepts it.
+    assert dataclasses.is_dataclass(packet.NavTelemetry)
+    fields = {f.name for f in dataclasses.fields(packet.NavTelemetry)}
+    assert {"drone_id", "x", "y", "current_waypoint_idx",
+            "waypoints_remaining", "mission_complete"} <= fields
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="F-INT-1: coverage_planner is never wired into the runtime — no producer "
-    "flies the planned waypoints or emits per-waypoint progress, so Task 1/2 "
-    "handlers never fire. Remove this marker once the producer consumes the planner.",
-)
 def test_runtime_wires_coverage_planner():
-    producer_src = (SRC / "producer.py").read_text(encoding="utf-8")
+    """The planner is consumed by the runtime: the WS router plans a START_MISSION
+    polygon via coverage_planner, and main.py registers producer.inject_mission
+    as the handler that flies the result through WaypointNavigators."""
+    ws_src = (SRC / "transport" / "websocket_server.py").read_text(encoding="utf-8")
     main_src = (SRC / "main.py").read_text(encoding="utf-8")
-    assert (
-        "coverage_planner" in producer_src or "coverage_planner" in main_src
-    ), "neither producer.py nor main.py imports/uses coverage_planner"
+    producer_src = (SRC / "producer.py").read_text(encoding="utf-8")
+
+    assert "plan_mission" in ws_src, "WS router must plan via coverage_planner"
+    assert "set_mission_handler" in main_src and "inject_mission" in main_src, (
+        "main.py must register the producer's mission handler"
+    )
+    assert "WaypointNavigator" in producer_src, (
+        "producer must fly planned waypoints via the navigator"
+    )
