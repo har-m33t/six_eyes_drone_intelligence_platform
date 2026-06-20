@@ -55,7 +55,10 @@ def _is_finite_number(coord) -> bool:
 
 
 def _is_valid_polygon(polygon) -> bool:
-    """A usable polygon is a list of at least three [x, y] finite-numeric vertices."""
+    """A usable polygon is a list of at least three ``[lng, lat]`` finite-numeric
+    vertices (the dashboard's Mapbox Draw control emits geographic coordinates).
+    Structural validation only — range checking (|lng|<=180, |lat|<=90) is left
+    to the planner, which is coordinate-system agnostic."""
     if not isinstance(polygon, (list, tuple)) or len(polygon) < 3:
         return False
     for vertex in polygon:
@@ -78,7 +81,9 @@ def _handle_start_mission(message: dict):
         print(f"[WS] START_MISSION rejected -- invalid polygon: {polygon!r}")
         return None
 
-    # Normalise vertices to plain (x, y) float tuples for shapely/the planner.
+    # Normalise vertices to plain (lng, lat) float tuples for shapely/the planner.
+    # The planner is unit-agnostic and self-scales its sweep spacing from the
+    # polygon extent, so geographic degrees need no special handling here.
     polygon_coords = [(float(x), float(y)) for x, y in polygon]
 
     # Guard the planner call too, not just the handler below: a geometry fault on

@@ -2,6 +2,7 @@
 real-time FPS, runs YOLO detection, builds a packet, and hands it to the sender.
 """
 import base64
+import math
 import threading
 import time
 
@@ -150,6 +151,26 @@ def _build_signal_lost_packet(drone_id, frame_idx, frame_b64):
     return packet
 
 
+def _gps_from_nav_telemetry(telemetry):
+    """Convert navigator route coordinates into the Mapbox GPS packet shape.
+
+    The planner now consumes Mapbox Draw polygons, so navigator ``x`` is lng and
+    ``y`` is lat for deployed missions. Keep ``lon`` as a compatibility alias.
+    """
+    if not telemetry:
+        return None
+    total = int(telemetry.get("current_waypoint_idx", 0)) + int(
+        telemetry.get("waypoints_remaining", 0)
+    )
+    if total <= 0:
+        return None
+    lng = float(telemetry["x"])
+    lat = float(telemetry["y"])
+    if not math.isfinite(lng) or not math.isfinite(lat):
+        return None
+    return {"lat": lat, "lng": lng, "lon": lng, "alt": 75.0}
+
+
 def drone_producer(drone_id, video_path, sender, start_offset=0):
     model = load_model()
     cap = cv2.VideoCapture(video_path)
@@ -178,9 +199,29 @@ def drone_producer(drone_id, video_path, sender, start_offset=0):
         ran_detection = frame_idx % config.DETECT_EVERY_N == 0
         if ran_detection:
             detections = run_detection(model, frame)
+        # --- Deploy Swarm: fly this drone's assigned route, if one is active.
+        # Movement integrates against real wall-clock dt (the loop runs below
+        # real-time on CPU, so frame_delay would understate it). When active, the
+        # navigator's lng/lat route position overrides the synthetic GPS in the
+        # main packet, so Mapbox markers/coverage follow the deployed mission.
+        nav = get_navigator(drone_id)
+        now = time.time()
+        nav_telemetry = None
+        gps_override = None
+        if nav is not None and nav.active:
+            nav_telemetry = nav.tick(now - nav_last_t)
+            gps_override = _gps_from_nav_telemetry(nav_telemetry)
+        nav_last_t = now
+
         frame_b64 = encode_frame_b64(frame)
         last_frame_b64 = frame_b64
-        packet = build_packet(drone_id, frame_idx, detections, frame_b64=frame_b64)
+        packet = build_packet(
+            drone_id,
+            frame_idx,
+            detections,
+            frame_b64=frame_b64,
+            gps_override=gps_override,
+        )
         sender.send(packet)
 
         # --- ADDITIVE: real Foundry dataset writes, off the WebSocket hot path.
@@ -203,19 +244,12 @@ def drone_producer(drone_id, video_path, sender, start_offset=0):
                     write_detection(make_detection_row(
                         drone_id, packet.timestamp, det["confidence"], packet.gps))
 
-        # --- Deploy Swarm: fly this drone's assigned route, if one is active.
-        # Movement integrates against real wall-clock dt (the loop runs below
-        # real-time on CPU, so frame_delay would understate it). The nav packet
-        # is a separate, gps-less wire format the dashboard routes to its coverage
-        # map; it's broadcast on a stride so it doesn't crowd the video frames on
-        # the primary WebSocket path.
-        nav = get_navigator(drone_id)
-        now = time.time()
-        if nav is not None and nav.active:
-            telemetry = nav.tick(now - nav_last_t)
+        # The nav packet is a separate, gps-less wire format the dashboard routes
+        # to its waypoint progress stat. It's broadcast on a stride so it doesn't
+        # crowd the video frames on the primary WebSocket path.
+        if nav_telemetry is not None:
             if frame_idx % config.NAV_BROADCAST_EVERY_N == 0:
-                sender.send(make_nav_packet(drone_id, telemetry))
-        nav_last_t = now
+                sender.send(make_nav_packet(drone_id, nav_telemetry))
 
         frame_idx += 1
         elapsed = time.time() - t_start
