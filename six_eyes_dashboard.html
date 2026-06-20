@@ -699,11 +699,11 @@ function initCoverageLayer() {
       // area. This prevents visible holes from opening as the operator zooms in.
       'circle-radius': [
         'interpolate', ['exponential', 2], ['zoom'],
-        10, 3,
-        12, 9,
-        14, 34,
-        16, 136,
-        18, 544,
+        10, 2,
+        12, 7,
+        14, 26,
+        16, 102,
+        18, 408,
       ],
     },
   });
@@ -780,7 +780,7 @@ const coverageCtx = coverageCanvas.getContext('2d');
 // into canvas pixels. Set this to match your coverage_planner search-area bounds;
 // 1000 x 1000 is a sane default for the demo's (x, y) waypoint space.
 const SIM_WORLD = { width: 1000, height: 1000 };
-const FOOTPRINT_RADIUS = 32;                       // px field-of-view footprint
+const FOOTPRINT_RADIUS = 24;                       // px field-of-view footprint
 const FOOTPRINT_FILL = 'rgba(147, 51, 234, 0.15)'; // tactical purple, semi-transparent
 
 // Footprints are retained in sim coordinates so a resize can re-rasterize the
