@@ -95,6 +95,18 @@ FOUNDRY_TOKEN = os.getenv("FOUNDRY_TOKEN", "")
 DATASET_RID = os.getenv("DATASET_RID", "")
 FOUNDRY_ENABLED = os.getenv("FOUNDRY_ENABLED", "true").lower() == "true"
 
+# --- Navigation (Deploy Swarm — Task 3) -------------------------------------
+# When the operator deploys a search polygon, each producer thread flies its
+# assigned boustrophedon route via WaypointNavigator. Speed is in SIM_WORLD
+# units/second (the planner's (x, y) space; the dashboard maps 0..1000 onto the
+# coverage canvas) and tick(dt) integrates against real wall-clock dt, so motion
+# is frame-rate independent. Tuned so a swept route is visibly traversed in-demo.
+NAV_SPEED_UNITS_S = float(os.getenv("NAV_SPEED_UNITS_S", "40"))
+# A drone is ticked every frame, but nav-telemetry is broadcast only every Nth
+# frame to keep the primary WebSocket path light (six feeds plus their video
+# already share it). ~8-10 Hz/drone is smooth motion on the map.
+NAV_BROADCAST_EVERY_N = int(os.getenv("NAV_BROADCAST_EVERY_N", "3"))
+
 # --- Mission ----------------------------------------------------------------
 MISSION_DURATION_S = int(os.getenv("MISSION_DURATION_S", "600"))
 
