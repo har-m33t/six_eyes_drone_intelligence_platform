@@ -12,11 +12,26 @@ Geometric backbone:
 The output is plain ``(x, y)`` tuples (no shapely objects leak out) so the
 rest of the SIX-EYES stack can serialise waypoints without a geometry
 dependency.
+
+Coordinate-system agnostic: the planner does plain planar geometry, so the
+input perimeter can be SIM ``(x, y)`` units *or* geographic ``(lng, lat)``
+degrees. Because a fixed sweep spacing means wildly different things in those
+two spaces (10 SIM units vs. 10° ≈ 1100 km), ``sweep_spacing`` defaults to a
+*scale-invariant* value derived from the polygon's own extent (see
+``DEFAULT_SWEEP_ROWS``) so a degree-scale search area gets a degree-scale
+spacing without the caller retuning anything.
 """
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+# Scale-invariant default density: when no explicit ``sweep_spacing`` is given,
+# lay this many parallel sweep lines across the polygon's vertical extent. Chosen
+# so a 100x50 rect yields spacing = 50 / 5 = 10.0 — the planner's historical
+# default — while a (lng, lat) polygon a few hundredths of a degree tall gets a
+# correspondingly tiny spacing instead of collapsing to a single sweep.
+DEFAULT_SWEEP_ROWS = 5
 
 import numpy as np
 from shapely.geometry import (
@@ -97,21 +112,29 @@ def _dedupe_consecutive(points: Path) -> Path:
 
 def generate_lawnmower_path(
     polygon_coords: List[Waypoint],
-    sweep_spacing: float,
+    sweep_spacing: Optional[float] = None,
 ) -> Path:
     """
     Build a continuous boustrophedon (lawnmower) path that covers ``polygon``.
 
     Args:
-        polygon_coords: Perimeter of the search area as ``(x, y)`` tuples.
-        sweep_spacing:  Vertical distance between parallel sweep lines. Smaller
-                        spacing → denser coverage and more waypoints.
+        polygon_coords: Perimeter of the search area as ``(x, y)`` *or*
+                        ``(lng, lat)`` tuples.
+        sweep_spacing:  Vertical distance between parallel sweep lines, in the
+                        same units as the coordinates. Smaller spacing → denser
+                        coverage and more waypoints. When ``None`` (the default)
+                        a scale-invariant spacing of
+                        ``height / DEFAULT_SWEEP_ROWS`` is computed from the
+                        polygon's own extent, so SIM and geographic polygons both
+                        work without retuning.
 
     Returns:
-        A flat, ordered list of ``(x, y)`` waypoints forming one continuous
-        snake path. Empty if the polygon is unusable or has no area.
+        A flat, ordered list of waypoints forming one continuous snake path, in
+        the input coordinate space. Empty if the polygon is unusable / no area.
     """
-    if sweep_spacing <= 0:
+    # Only an *explicit* non-positive spacing is an error; ``None`` means "pick
+    # one for me" and is resolved from the polygon bounds below.
+    if sweep_spacing is not None and sweep_spacing <= 0:
         raise ValueError("sweep_spacing must be a positive distance.")
 
     # 1. Build the polygon. A user-drawn perimeter is frequently invalid —
@@ -129,6 +152,11 @@ def generate_lawnmower_path(
 
     # 2. Axis-aligned bounding box gives us the vertical extent to sweep over.
     min_x, min_y, max_x, max_y = polygon.bounds
+
+    # Resolve a scale-invariant spacing from the polygon's height when the caller
+    # didn't pin one — keeps the planner unit-agnostic ((x, y) or (lng, lat)).
+    if sweep_spacing is None:
+        sweep_spacing = (max_y - min_y) / DEFAULT_SWEEP_ROWS
 
     # 3. Generate the Y-altitudes for each horizontal sweep line. We start half
     #    a spacing *inside* the bottom edge so the first/last lines sit within
@@ -220,15 +248,19 @@ def split_path_for_drones(
 def plan_mission(
     polygon_coords: List[Waypoint],
     num_drones: int = 6,
-    sweep_spacing: float = 10.0,
+    sweep_spacing: Optional[float] = None,
 ) -> Dict[str, Path]:
     """
     End-to-end planner: polygon → lawnmower path → per-drone assignments.
 
     Args:
-        polygon_coords: Search-area perimeter as ``(x, y)`` tuples.
+        polygon_coords: Search-area perimeter as ``(x, y)`` or ``(lng, lat)``
+                        tuples.
         num_drones:     Size of the swarm.
-        sweep_spacing:  Distance between parallel sweep lines.
+        sweep_spacing:  Distance between parallel sweep lines, in the coordinate
+                        units. ``None`` (default) self-scales from the polygon
+                        extent (see ``generate_lawnmower_path``), so geographic
+                        polygons need no retuning.
 
     Returns:
         ``{"drone_<n>": [(x, y), ...]}`` covering the whole search area.
