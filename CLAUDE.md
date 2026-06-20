@@ -26,7 +26,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_inference.py    # r
 python tests/ws_client_test.py         # manual WS client: connect to ws://localhost:8765 and print packets
 ```
 
-Requires a `.env` file (see README §7): `FOUNDRY_URL`, `FOUNDRY_TOKEN`, `DATASET_RID`, `WS_HOST`, `WS_PORT`, `MISSION_DURATION_S`. The Foundry sink can be disabled (`foundry_enabled=False` on the sender) to run the dashboard locally without a Foundry instance.
+Requires a `.env` file (see README §7): `FOUNDRY_URL`, `FOUNDRY_TOKEN`, `DATASET_RID`, `WS_HOST`, `WS_PORT`. (`MISSION_DURATION_S` is vestigial — `main.py` now streams continuously until Ctrl+C rather than exiting after a fixed duration.) The Foundry sink can be disabled (`foundry_enabled=False` on the sender) to run the dashboard locally without a Foundry instance.
 
 ## Architecture — The Big Picture
 
