@@ -78,6 +78,58 @@
   }
   .mission-clock b { color: var(--accent); font-weight: 600; }
 
+  /* ── Deploy Swarm controls (Task 1) ── */
+  .deploy-controls {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .deploy-hint {
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .deploy-hint.armed { color: var(--accent); }
+  .deploy-hint.error { color: var(--amber); }
+
+  .deploy-btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: rgba(167,139,250,0.1);
+    border: 1px solid var(--accent-dim);
+    padding: 7px 16px;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  }
+  .deploy-btn:hover:not(:disabled) {
+    background: rgba(167,139,250,0.2);
+    border-color: var(--accent);
+  }
+  .deploy-btn:disabled {
+    color: var(--text-dim);
+    background: transparent;
+    border-color: var(--line);
+    cursor: not-allowed;
+  }
+  /* Secondary/ghost action (CLEAR) — neutral until hovered. */
+  .deploy-btn.ghost {
+    color: var(--text-dim);
+    background: transparent;
+    border-color: var(--line);
+    font-weight: 400;
+  }
+  .deploy-btn.ghost:hover:not(:disabled) {
+    color: var(--text-primary);
+    border-color: var(--line-bright);
+    background: transparent;
+  }
+
   /* ── Layout ── */
   .grid {
     display: grid;
@@ -179,7 +231,12 @@
 
   /* ── Map panel ── */
   .map-wrap { flex: 1; position: relative; background: #0a0812; }
-  #map-canvas { width: 100%; height: 100%; display: block; }
+  #map-canvas, #coverage-canvas {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%; display: block;
+  }
+  /* Coverage heatmap accumulates ABOVE the live GPS map and never intercepts input. */
+  #coverage-canvas { pointer-events: none; }
   .map-legend {
     position: absolute; bottom: 8px; left: 10px;
     font-size: 9px; color: var(--text-dim); letter-spacing: 0.05em;
@@ -316,6 +373,11 @@
     <div class="conn-dot" id="connDot"></div>
     <span id="connText">CONNECTING...</span>
   </div>
+  <div class="deploy-controls">
+    <span class="deploy-hint" id="deployHint">DRAW SEARCH AREA ON MAP</span>
+    <button class="deploy-btn ghost" id="clearPolygonBtn" disabled>CLEAR</button>
+    <button class="deploy-btn" id="deploySwarmBtn" disabled>DEPLOY SWARM</button>
+  </div>
   <div class="mission-clock">MISSION T+ <b id="missionClock">00:00:00</b></div>
 </div>
 
@@ -331,6 +393,7 @@
     <div class="panel-head"><span>POSITION // GPS</span><span class="count" id="zoneCoverage">COVERAGE 0%</span></div>
     <div class="map-wrap">
       <canvas id="map-canvas"></canvas>
+      <canvas id="coverage-canvas"></canvas>
       <div class="map-legend">
         <span><span class="legend-dot" style="background:#a78bfa"></span>ONLINE</span>
         <span><span class="legend-dot" style="background:#ffb84d"></span>WARNING</span>
@@ -409,10 +472,60 @@ DRONE_IDS.forEach(id => {
 // ── Map setup ──
 const canvas = document.getElementById('map-canvas');
 const ctx = canvas.getContext('2d');
+
+// ── Coverage heatmap (Task 1) ──
+// A dedicated overlay canvas. Unlike the live GPS map (which drawMap() repaints
+// every animation frame), this layer is an ACCUMULATION buffer: footprints are
+// painted once as nav telemetry arrives and are never cleared per tick, so they
+// overlap into a continuous purple coverage heatmap.
+const coverageCanvas = document.getElementById('coverage-canvas');
+const coverageCtx = coverageCanvas.getContext('2d');
+
+// Raw simulation-coordinate extent of the search area. mapToCanvasX/Y scale these
+// into canvas pixels. Set this to match your coverage_planner search-area bounds;
+// 1000 x 1000 is a sane default for the demo's (x, y) waypoint space.
+const SIM_WORLD = { width: 1000, height: 1000 };
+const FOOTPRINT_RADIUS = 20;                       // px field-of-view footprint
+const FOOTPRINT_FILL = 'rgba(147, 51, 234, 0.15)'; // tactical purple, semi-transparent
+
+// Footprints are retained in sim coordinates so a resize can re-rasterize the
+// whole heatmap at the new pixel scale (resizing a canvas clears its bitmap).
+const coverageFootprints = [];
+
+function mapToCanvasX(x) {
+  return (x / SIM_WORLD.width) * coverageCanvas.width;
+}
+function mapToCanvasY(y) {
+  return (y / SIM_WORLD.height) * coverageCanvas.height;
+}
+
+function paintFootprint(x, y) {
+  coverageCtx.beginPath();
+  coverageCtx.arc(mapToCanvasX(x), mapToCanvasY(y), FOOTPRINT_RADIUS, 0, Math.PI * 2);
+  coverageCtx.fillStyle = FOOTPRINT_FILL;
+  coverageCtx.fill();
+}
+
+// Records + draws one drone footprint. Guards against non-nav packets that
+// lack numeric x/y so the live GPS path is never affected.
+function recordCoverage(x, y) {
+  if (typeof x !== 'number' || typeof y !== 'number') return;
+  coverageFootprints.push({ x, y });
+  paintFootprint(x, y);
+}
+
+function redrawCoverage() {
+  coverageCtx.clearRect(0, 0, coverageCanvas.width, coverageCanvas.height);
+  coverageFootprints.forEach(pt => paintFootprint(pt.x, pt.y));
+}
+
 function resizeCanvas() {
   const wrap = canvas.parentElement;
   canvas.width = wrap.clientWidth;
   canvas.height = wrap.clientHeight;
+  coverageCanvas.width = wrap.clientWidth;
+  coverageCanvas.height = wrap.clientHeight;
+  redrawCoverage(); // re-rasterize the accumulated heatmap at the new scale
 }
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
@@ -608,6 +721,108 @@ function generateLocalIntel() {
   }
 }
 
+// ── Deploy Swarm: polygon drawing + mission dispatch (Task 1) ──
+// The operator clicks the GPS map to drop search-area vertices, then clicks
+// DEPLOY SWARM to transmit a START_MISSION command. Vertices are captured in
+// SIM_WORLD (x, y) space — the exact space coverage_planner.plan_mission expects
+// — by inverting the sim→canvas pixel scale used by mapToCanvasX/Y.
+const missionPolygon = []; // [[x, y], ...] in SIM_WORLD coordinates
+
+function canvasToSimX(px) { return (px / coverageCanvas.width) * SIM_WORLD.width; }
+function canvasToSimY(py) { return (py / coverageCanvas.height) * SIM_WORLD.height; }
+
+const deployHint = document.getElementById('deployHint');
+const deploySwarmBtn = document.getElementById('deploySwarmBtn');
+const clearPolygonBtn = document.getElementById('clearPolygonBtn');
+
+// Reflect polygon/connection state into the controls. A valid mission needs at
+// least 3 vertices (a polygon) AND a live socket to send over.
+function refreshDeployControls() {
+  const enough = missionPolygon.length >= 3;
+  clearPolygonBtn.disabled = missionPolygon.length === 0;
+  deploySwarmBtn.disabled = !enough;
+  deployHint.classList.remove('error');
+  if (missionPolygon.length === 0) {
+    deployHint.textContent = 'DRAW SEARCH AREA ON MAP';
+    deployHint.classList.remove('armed');
+  } else {
+    deployHint.textContent = enough
+      ? `${missionPolygon.length} VERTICES — READY`
+      : `${missionPolygon.length}/3 VERTICES`;
+    deployHint.classList.toggle('armed', enough);
+  }
+}
+
+function flashHint(message) {
+  deployHint.textContent = message;
+  deployHint.classList.add('error');
+  deployHint.classList.remove('armed');
+  setTimeout(refreshDeployControls, 1800);
+}
+
+// Each map click drops one vertex (converted to SIM_WORLD coordinates).
+canvas.parentElement.addEventListener('click', (e) => {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const px = e.clientX - rect.left;
+  const py = e.clientY - rect.top;
+  missionPolygon.push([
+    Math.round(canvasToSimX(px)),
+    Math.round(canvasToSimY(py)),
+  ]);
+  refreshDeployControls();
+});
+
+clearPolygonBtn.addEventListener('click', () => {
+  missionPolygon.length = 0;
+  refreshDeployControls();
+});
+
+// Extract the drawn polygon and transmit it over the existing WebSocket using
+// the strict START_MISSION schema. Coordinates are sent as [[x, y], ...].
+function deploySwarm() {
+  if (missionPolygon.length < 3) { flashHint('NEED 3+ POINTS'); return; }
+  if (!ws || ws.readyState !== WebSocket.OPEN) { flashHint('WS OFFLINE'); return; }
+
+  const payload = {
+    command: 'START_MISSION',
+    polygon: missionPolygon.map(([x, y]) => [x, y]),
+  };
+  ws.send(JSON.stringify(payload));
+
+  deployHint.textContent = `MISSION SENT — ${missionPolygon.length} VERTICES`;
+  deployHint.classList.add('armed');
+  deployHint.classList.remove('error');
+}
+deploySwarmBtn.addEventListener('click', deploySwarm);
+
+// Render the in-progress polygon on top of the live GPS map. Drawn in renderLoop
+// (not drawMap, which early-returns before GPS telemetry) so it is visible even
+// on the empty pre-telemetry map.
+function drawMissionPolygon() {
+  if (missionPolygon.length === 0) return;
+  ctx.save();
+  ctx.beginPath();
+  missionPolygon.forEach(([x, y], i) => {
+    const cx = mapToCanvasX(x), cy = mapToCanvasY(y);
+    if (i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+  });
+  if (missionPolygon.length >= 3) ctx.closePath();
+  ctx.strokeStyle = 'rgba(167,139,250,0.9)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  if (missionPolygon.length >= 3) {
+    ctx.fillStyle = 'rgba(167,139,250,0.08)';
+    ctx.fill();
+  }
+  missionPolygon.forEach(([x, y]) => {
+    ctx.beginPath();
+    ctx.arc(mapToCanvasX(x), mapToCanvasY(y), 3, 0, Math.PI * 2);
+    ctx.fillStyle = '#a78bfa';
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
 // ── WebSocket ──
 let ws;
 function connect() {
@@ -629,8 +844,61 @@ function connect() {
 
   ws.onmessage = (event) => {
     const pkt = JSON.parse(event.data);
-    handlePacket(pkt);
+    // Navigation telemetry (coverage_planner) carries raw x/y sweep coordinates
+    // and waypoint progress; full drone packets carry gps/health/detections.
+    if (isNavTelemetry(pkt)) {
+      handleNavTelemetry(pkt);
+    } else {
+      handlePacket(pkt);
+    }
   };
+}
+
+// A nav-telemetry packet exposes waypoint progress + raw simulation x/y, and has
+// none of the gps/health/detections structure handlePacket() expects.
+function isNavTelemetry(pkt) {
+  return 'current_waypoint_idx' in pkt
+    || (typeof pkt.x === 'number' && typeof pkt.y === 'number' && !pkt.gps);
+}
+
+function handleNavTelemetry(pkt) {
+  // Task 1: paint a persistent coverage footprint at the drone's position.
+  recordCoverage(pkt.x, pkt.y);
+  // Task 2: fold this drone's waypoint progress into the swarm coverage stat.
+  updateCoverageStat(pkt);
+}
+
+// ── Task 2: live swarm coverage ("% SEARCHED") ──
+// Per-drone waypoint progress sourced from the navigation telemetry stream,
+// keyed by normalized DRONE_n id → {current, total}. Independent of droneState
+// (which holds full gps/health packets) since nav telemetry is its own stream.
+const coverageProgress = {};
+
+// Update one drone's waypoint progress from a navigation telemetry payload,
+// then recompute the global swarm coverage shown in the GPS panel header.
+function updateCoverageStat(telemetry) {
+  const id = String(telemetry.drone_id || '').toUpperCase();
+  if (!id) return;
+
+  const current = Number(telemetry.current_waypoint_idx) || 0;
+  const remaining = Number(telemetry.waypoints_remaining) || 0;
+  // Total route length = waypoints already hit + waypoints still ahead.
+  let total = current + remaining;
+  // A drone reporting mission_complete has searched its whole route even if
+  // remaining momentarily reads 0/undefined — clamp so it counts as done.
+  if (telemetry.mission_complete) total = Math.max(total, current, 1);
+
+  coverageProgress[id] = { current, total };
+
+  // Global swarm coverage = mean of each known drone's completion fraction,
+  // weighting every zone equally regardless of individual route length.
+  const tracked = Object.values(coverageProgress).filter(d => d.total > 0);
+  const globalPct = tracked.length
+    ? tracked.reduce((s, d) => s + d.current / d.total, 0) / tracked.length * 100
+    : 0;
+
+  document.getElementById('zoneCoverage').textContent =
+    `${globalPct.toFixed(0)}% SEARCHED`;
 }
 
 function handlePacket(pkt) {
@@ -715,13 +983,14 @@ function refreshSummary() {
   document.getElementById('statDetections').textContent = activeDetections;
   document.getElementById('statBattery').textContent = drones.length ? `${avgBatt.toFixed(0)}%` : '--';
   document.getElementById('statAlerts').textContent = alertCount;
-
-  const avgCoverage = drones.length ? (drones.reduce((s,d) => s + (d.mission?.coverage_pct||0), 0) / drones.length) : 0;
-  document.getElementById('zoneCoverage').textContent = `COVERAGE ${avgCoverage.toFixed(0)}%`;
+  // NOTE: #zoneCoverage is now owned by updateCoverageStat() (Task 2), which
+  // drives it from real waypoint progress on the nav-telemetry stream. The old
+  // mission.coverage_pct placeholder write was removed to avoid the two fighting.
 }
 
 function renderLoop() {
   drawMap();
+  drawMissionPolygon();
   requestAnimationFrame(renderLoop);
 }
 
