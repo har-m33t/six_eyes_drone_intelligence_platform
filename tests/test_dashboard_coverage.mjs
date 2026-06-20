@@ -100,6 +100,7 @@ function makeCanvas(id, wrap) {
 function buildSandbox() {
   const elements = {};
   const markerInstances = [];
+  const mapInstances = [];
   // Shared map-wrap parent for both canvases; the script reads clientWidth/Height.
   const wrap = makeEl('map-wrap');
   wrap.clientWidth = CANVAS_PX;
@@ -129,6 +130,7 @@ function buildSandbox() {
       this._handlers = {};
       this._sources = {};
       this._layers = [];
+      mapInstances.push(this);
     }
     addControl() { return this; }
     on(ev, fn) { (this._handlers[ev] ||= []).push(fn); return this; }
@@ -176,6 +178,7 @@ function buildSandbox() {
     parseInt, parseFloat, isNaN,
     _elements: elements, // test-only escape hatch
     _markerInstances: markerInstances,
+    _mapInstances: mapInstances,
   };
   sandbox.globalThis = sandbox;
   return sandbox;
@@ -202,6 +205,8 @@ function fresh() {
     coverageArcs: () => s._elements['coverage-canvas']._ctx.arcs,
     mapCtx: () => s._elements['map-canvas']._ctx,
     coverageCtx: () => s._elements['coverage-canvas']._ctx,
+    coverageFeatures: () => s._mapInstances[0]._sources['coverage-source'].data.features,
+    coverageLayer: () => s._mapInstances[0]._layers.find((layer) => layer.id === 'coverage-layer'),
   };
 }
 
@@ -231,13 +236,13 @@ test('T1: mapToCanvasX/Y scale sim coords into canvas pixels', () => {
   assert.equal(s.mapToCanvasY(250), 175);
 });
 
-test('T1: paintFootprint draws a 20px purple semi-transparent circle', () => {
+test('T1: paintFootprint draws a larger purple semi-transparent circle', () => {
   const { s, coverageArcs } = fresh();
   s.paintFootprint(500, 500);
   const arc = coverageArcs().at(-1);
   assert.equal(arc.x, 350);
   assert.equal(arc.y, 350);
-  assert.equal(arc.r, 20, 'footprint radius must be ~20px per spec');
+  assert.equal(arc.r, 32, 'footprint radius should be large enough to avoid gaps');
   assert.equal(arc.fillStyle, 'rgba(147, 51, 234, 0.15)', 'spec-mandated tactical purple');
 });
 
@@ -344,6 +349,21 @@ test('router: handleNavTelemetry both paints AND advances the stat', () => {
   assert.equal(zoneText(), '50% SEARCHED', 'and updated the stat');
 });
 
+test('router: transit nav telemetry advances stat but paints no canvas footprint', () => {
+  const { s, coverageArcs, zoneText } = fresh();
+  const before = coverageArcs().length;
+  s.handleNavTelemetry({
+    drone_id: 'drone_1',
+    x: 500,
+    y: 500,
+    current_waypoint_idx: 0,
+    waypoints_remaining: 10,
+    coverage_active: false,
+  });
+  assert.equal(coverageArcs().length, before, 'transit should not paint coverage');
+  assert.equal(zoneText(), '0% SEARCHED', 'progress remains at mission coverage');
+});
+
 test('router: full packet detection is shown on the Mapbox marker, not canvas overlay', () => {
   const { s, mapCtx } = fresh();
   const mapArcsBefore = mapCtx().arcs.length;
@@ -362,6 +382,49 @@ test('router: full packet detection is shown on the Mapbox marker, not canvas ov
   const markerDot = s._markerInstances[0].opts.element.children[0];
   assert.equal(markerDot.classList.contains('detected'), true, 'human detection should live on Mapbox marker');
   assert.equal(mapCtx().arcs.length, mapArcsBefore, 'legacy canvas overlay must not draw duplicate drone dots/rings');
+});
+
+test('router: transit full packets move marker without painting Mapbox coverage', () => {
+  const { s, coverageFeatures } = fresh();
+  s.handlePacket({
+    drone_id: 'DRONE_1',
+    gps: { lat: 33.68, lng: -117.82, lon: -117.82, alt: 75, coverage_active: false },
+    health: { battery: 91, signal: 'STRONG', status: 'ONLINE', speed_ms: 12, temp_c: 40 },
+    detections: [],
+    mission: { zone: 'ALPHA', coverage_pct: 0, elapsed_s: 1 },
+  });
+
+  assert.equal(coverageFeatures().length, 0, 'transit GPS should not paint coverage');
+  assert.deepEqual(JSON.parse(JSON.stringify(s._markerInstances[0].lngLat)), [-117.82, 33.68]);
+});
+
+test('router: full GPS packets densify the Mapbox coverage trail', () => {
+  const { s, coverageFeatures, coverageLayer } = fresh();
+  const radius = coverageLayer().paint['circle-radius'];
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(radius)),
+    ['interpolate', ['exponential', 2], ['zoom'], 10, 3, 12, 9, 14, 34, 16, 136, 18, 544],
+    'Mapbox footprints should scale with zoom to keep ground coverage consistent'
+  );
+
+  const packet = {
+    drone_id: 'DRONE_1',
+    gps: { lat: 33.68, lng: -117.82, lon: -117.82, alt: 75 },
+    health: { battery: 91, signal: 'STRONG', status: 'ONLINE', speed_ms: 12, temp_c: 40 },
+    detections: [],
+    mission: { zone: 'ALPHA', coverage_pct: 10, elapsed_s: 1 },
+  };
+
+  s.handlePacket(packet);
+  const afterFirst = coverageFeatures().length;
+  s.handlePacket({
+    ...packet,
+    gps: { lat: 33.6802, lng: -117.8198, lon: -117.8198, alt: 75 },
+  });
+
+  assert.equal(afterFirst, 1, 'first packet seeds one coverage point');
+  assert.ok(coverageFeatures().length > afterFirst + 1, 'movement should insert interpolated points to fill gaps');
 });
 
 // =========================================================================== //
