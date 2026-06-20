@@ -52,9 +52,12 @@ def _coerce_waypoints(waypoints):
         if not isinstance(vertex, (list, tuple)) or len(vertex) != 2:
             return None
         try:
-            route.append((float(vertex[0]), float(vertex[1])))
+            x, y = float(vertex[0]), float(vertex[1])
         except (TypeError, ValueError):
             return None
+        if not math.isfinite(x) or not math.isfinite(y):
+            return None
+        route.append((x, y))
     return route
 
 
@@ -171,6 +174,14 @@ def _gps_from_nav_telemetry(telemetry):
     return {"lat": lat, "lng": lng, "lon": lng, "alt": 75.0}
 
 
+def _hover_gps(drone_id):
+    """Fixed pre-mission GPS so drones hold position until START_MISSION."""
+    pattern = config.DRONE_PATTERNS[drone_id]
+    lng = round(config.BASE_LON + pattern["lon_amp"], 6)
+    lat = round(config.BASE_LAT, 6)
+    return {"lat": lat, "lng": lng, "lon": lng, "alt": 75.0}
+
+
 def drone_producer(drone_id, video_path, sender, start_offset=0):
     model = load_model()
     cap = cv2.VideoCapture(video_path)
@@ -207,10 +218,10 @@ def drone_producer(drone_id, video_path, sender, start_offset=0):
         nav = get_navigator(drone_id)
         now = time.time()
         nav_telemetry = None
-        gps_override = None
+        gps_override = _hover_gps(drone_id)
         if nav is not None and nav.active:
             nav_telemetry = nav.tick(now - nav_last_t)
-            gps_override = _gps_from_nav_telemetry(nav_telemetry)
+            gps_override = _gps_from_nav_telemetry(nav_telemetry) or gps_override
         nav_last_t = now
 
         frame_b64 = encode_frame_b64(frame)
