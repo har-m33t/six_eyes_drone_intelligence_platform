@@ -456,6 +456,7 @@
   </div>
   <div class="deploy-controls">
     <span class="deploy-hint" id="deployHint">DRAW SEARCH AREA ON MAP</span>
+    <button class="deploy-btn ghost" id="drawPolygonBtn">DRAW AREA</button>
     <button class="deploy-btn ghost" id="clearPolygonBtn" disabled>CLEAR</button>
     <button class="deploy-btn" id="deploySwarmBtn" disabled>DEPLOY SWARM</button>
   </div>
@@ -922,28 +923,94 @@ function generateLocalIntel() {
 
 // ── Deploy Swarm: polygon drawing + mission dispatch (Task 2 — Mapbox Draw) ──
 // REPLACES the old canvas-click vertex capture. The operator draws the search
-// area with the Mapbox GL Draw control (draw_polygon only); DEPLOY SWARM pulls
+// area with the Mapbox GL Draw control (polygon + trash only); DEPLOY SWARM pulls
 // the drawn polygon's GeoJSON ring as [lng, lat] tuples and transmits a
 // START_MISSION command over the existing WebSocket. Because Mapbox owns the
 // geometry, pan/zoom never desyncs the drawn area — it re-projects each frame.
 const deployHint = document.getElementById('deployHint');
+const drawPolygonBtn = document.getElementById('drawPolygonBtn');
 const deploySwarmBtn = document.getElementById('deploySwarmBtn');
 const clearPolygonBtn = document.getElementById('clearPolygonBtn');
 
-// The Mapbox Draw instance. Restricted to draw_polygon: no line/point tools, and
-// the built-in trash control is omitted — the CLEAR button drives deleteAll()
-// instead, keeping the toolbar to "draw a polygon" only.
-const draw = new MapboxDraw({
-  displayControlsDefault: false,
-  controls: { polygon: true },
-});
-map.addControl(draw, 'top-left');
+// The Mapbox Draw instance. Restricted to polygon + trash controls: no
+// line/point tools. The toolbar trash and the existing CLEAR button both remove
+// the drawn mission polygon through Mapbox Draw, keeping geometry state in one
+// place.
+let draw = null;
+if (typeof MapboxDraw === 'function') {
+  draw = new MapboxDraw({
+    displayControlsDefault: false,
+    controls: { polygon: true, trash: true },
+  });
+  map.addControl(draw, 'top-left');
+} else {
+  console.warn('MapboxDraw failed to load; falling back to click-to-place polygon drawing.');
+}
+
+// Fallback polygon capture used only if the Mapbox Draw CDN/control is missing.
+// It still records real Mapbox [lng, lat] click coordinates and renders them as
+// a lightweight GeoJSON overlay, so Deploy Swarm remains usable.
+const FALLBACK_DRAW_SOURCE_ID = 'six-eyes-fallback-draw';
+const fallbackDrawGeoJSON = { type: 'FeatureCollection', features: [] };
+const fallbackDraw = { active: false, polygon: [] };
+
+function fallbackDrawFeatureCollection() {
+  const features = [];
+  if (fallbackDraw.polygon.length >= 2) {
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: fallbackDraw.polygon },
+      properties: {},
+    });
+  }
+  if (fallbackDraw.polygon.length >= 3) {
+    features.push({
+      type: 'Feature',
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[...fallbackDraw.polygon, fallbackDraw.polygon[0]]],
+      },
+      properties: {},
+    });
+  }
+  fallbackDrawGeoJSON.features = features;
+  return fallbackDrawGeoJSON;
+}
+
+function updateFallbackDrawLayer() {
+  const src = map.getSource(FALLBACK_DRAW_SOURCE_ID);
+  if (src) src.setData(fallbackDrawFeatureCollection());
+}
+
+function initFallbackDrawLayer() {
+  if (map.getSource(FALLBACK_DRAW_SOURCE_ID)) return;
+  map.addSource(FALLBACK_DRAW_SOURCE_ID, {
+    type: 'geojson',
+    data: fallbackDrawFeatureCollection(),
+  });
+  map.addLayer({
+    id: `${FALLBACK_DRAW_SOURCE_ID}-fill`,
+    type: 'fill',
+    source: FALLBACK_DRAW_SOURCE_ID,
+    filter: ['==', ['geometry-type'], 'Polygon'],
+    paint: { 'fill-color': '#a78bfa', 'fill-opacity': 0.18 },
+  });
+  map.addLayer({
+    id: `${FALLBACK_DRAW_SOURCE_ID}-line`,
+    type: 'line',
+    source: FALLBACK_DRAW_SOURCE_ID,
+    paint: { 'line-color': '#a78bfa', 'line-width': 2 },
+  });
+}
+if (map.isStyleLoaded()) initFallbackDrawLayer();
+else map.on('load', initFallbackDrawLayer);
 
 // Pull the drawn polygon's outer ring as [lng, lat] vertices. GeoJSON polygon
 // rings are CLOSED (the last vertex repeats the first); we drop that duplicate
 // so we transmit N distinct vertices, matching the START_MISSION schema the
 // planner expects. Returns [] when nothing usable is drawn.
 function getMissionPolygon() {
+  if (!draw) return fallbackDraw.polygon.map(([lng, lat]) => [lng, lat]);
   const fc = draw.getAll();
   const poly = fc.features.find(f => f.geometry && f.geometry.type === 'Polygon');
   if (!poly) return [];
@@ -981,6 +1048,35 @@ function flashHint(message) {
   setTimeout(refreshDeployControls, 1800);
 }
 
+function startDrawingArea() {
+  clearCoverageTelemetry();
+  if (draw) {
+    draw.deleteAll();
+    if (typeof draw.changeMode === 'function') draw.changeMode('draw_polygon');
+    deployHint.textContent = 'CLICK MAP TO DRAW AREA';
+    deployHint.classList.add('armed');
+    deployHint.classList.remove('error');
+    refreshDeployControls();
+    return;
+  }
+
+  fallbackDraw.active = true;
+  fallbackDraw.polygon = [];
+  updateFallbackDrawLayer();
+  deployHint.textContent = 'CLICK MAP TO PLACE VERTICES';
+  deployHint.classList.add('armed');
+  deployHint.classList.remove('error');
+  refreshDeployControls();
+}
+drawPolygonBtn.addEventListener('click', startDrawingArea);
+
+map.on('click', (event) => {
+  if (draw || !fallbackDraw.active || !event.lngLat) return;
+  fallbackDraw.polygon.push([event.lngLat.lng, event.lngLat.lat]);
+  updateFallbackDrawLayer();
+  refreshDeployControls();
+});
+
 // Mapbox Draw emits these as the operator draws / edits / deletes the polygon;
 // keep the DEPLOY/CLEAR buttons and the hint in sync with the live geometry.
 map.on('draw.create', refreshDeployControls);
@@ -988,7 +1084,10 @@ map.on('draw.update', refreshDeployControls);
 map.on('draw.delete', refreshDeployControls);
 
 clearPolygonBtn.addEventListener('click', () => {
-  draw.deleteAll();
+  if (draw) draw.deleteAll();
+  fallbackDraw.active = false;
+  fallbackDraw.polygon = [];
+  updateFallbackDrawLayer();
   clearCoverageTelemetry();
   refreshDeployControls();
 });
