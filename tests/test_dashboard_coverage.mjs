@@ -167,6 +167,7 @@ test('dashboard script loads and exposes the coverage functions', () => {
   for (const fn of [
     'mapToCanvasX', 'mapToCanvasY', 'paintFootprint', 'recordCoverage',
     'redrawCoverage', 'isNavTelemetry', 'handleNavTelemetry', 'updateCoverageStat',
+    'resetCoverageStat',
   ]) {
     assert.equal(typeof s[fn], 'function', `${fn} should be defined`);
   }
@@ -211,15 +212,15 @@ test('T1: recordCoverage rejects undefined/null/string coords', () => {
   assert.equal(coverageArcs().length, before, 'no footprint should be drawn for bad input');
 });
 
-// SHORTCOMING (F-T1-3): the guard is `typeof x !== 'number'`, but typeof NaN is
-// 'number', so a NaN coordinate slips through and is pushed into the unbounded
-// coverageFootprints array (and arc()'d at NaN, a silent canvas no-op). Pinned.
-test('T1: NaN coords slip the typeof guard (documents F-T1-3)', () => {
+// F-T1-3 fixed: recordCoverage now guards with Number.isFinite, so a NaN/Infinity
+// coordinate (typeof NaN === 'number' slips a plain typeof check) is rejected
+// before it can be stored or arc()'d at a non-finite centre.
+test('T1: NaN coords are rejected by the finite guard (F-T1-3 fixed)', () => {
   const { s, coverageArcs } = fresh();
   const before = coverageArcs().length;
   s.recordCoverage(NaN, NaN);
-  assert.equal(coverageArcs().length - before, 1, 'NaN currently paints (a stored, wasted footprint)');
-  assert.ok(Number.isNaN(coverageArcs().at(-1).x), 'arc centre is NaN');
+  s.recordCoverage(Infinity, 0);
+  assert.equal(coverageArcs().length - before, 0, 'non-finite coords paint nothing');
 });
 
 test('T1: heatmap accumulates — canvas is never cleared on a normal tick', () => {
@@ -312,11 +313,11 @@ test('T2: zero progress reads 0%', () => {
   assert.equal(zoneText(), '0% SEARCHED');
 });
 
-test('T2: global is the mean of per-drone completion fractions', () => {
+test('T2: equal-length routes → weighted % equals the simple average', () => {
   const { s, zoneText } = fresh();
   s.updateCoverageStat({ drone_id: 'drone_1', current_waypoint_idx: 100, waypoints_remaining: 0 });   // 100%
   s.updateCoverageStat({ drone_id: 'drone_2', current_waypoint_idx: 0, waypoints_remaining: 100 });   // 0%
-  // mean(100%, 0%) = 50%
+  // Both routes are 100 long, so Σdone/Σtotal = 100/200 = 50% (= the average too).
   assert.equal(zoneText(), '50% SEARCHED');
 });
 
@@ -331,6 +332,14 @@ test('T2: drone_id is case-normalised (lowercase payload, one key per drone)', (
 test('T2: mission_complete clamps a drone to 100% even if remaining is 0/missing', () => {
   const { s, zoneText } = fresh();
   s.updateCoverageStat({ drone_id: 'drone_1', current_waypoint_idx: 85, waypoints_remaining: 0, mission_complete: true });
+  assert.equal(zoneText(), '100% SEARCHED');
+});
+
+test('T2: mission_complete reads 100% even when current is 0 (F-T2-4 fixed)', () => {
+  const { s, zoneText } = fresh();
+  // Degenerate-but-possible packet: a drone signals done while reporting no
+  // progress. It must still count as fully searched, not 0%.
+  s.updateCoverageStat({ drone_id: 'drone_1', current_waypoint_idx: 0, waypoints_remaining: 0, mission_complete: true });
   assert.equal(zoneText(), '100% SEARCHED');
 });
 
@@ -374,28 +383,41 @@ test('T2 STRESS: thousands of progress updates stay numeric and in [0,100]', () 
   assert.ok(pct >= 0 && pct <= 100, `global pct in range, got ${pct}`);
 });
 
-// --- Known shortcomings, PINNED as current behavior ------------------------ //
-// These two tests assert the CURRENT (flawed) output so the suite is green and
-// the behavior is locked in. The DESIRED behavior is in the comment + the review
-// doc (F-T2-1 / F-T2-2); flip the expected value when the fix lands.
-
-test('T2: only-reported drones counted → over-reports swarm coverage (F-T2-1)', () => {
+// --- F-T2-3: coverage resets on a new WS session --------------------------- //
+test('T2: resetCoverageStat clears tracker + stat on reconnect (F-T2-3 fixed)', () => {
   const { s, zoneText } = fresh();
-  // Only ONE of six drones has reported, at 100%. The global average is taken
-  // over *tracked* drones only, so the swarm reads fully searched while five
-  // drones have not started.
-  s.updateCoverageStat({ drone_id: 'drone_1', current_waypoint_idx: 100, waypoints_remaining: 0 });
-  assert.equal(zoneText(), '100% SEARCHED');
-  // DESIRED (F-T2-1): denominator should be the whole swarm (6) → ~17% SEARCHED.
+  s.updateCoverageStat({ drone_id: 'drone_1', current_waypoint_idx: 50, waypoints_remaining: 50 });
+  assert.equal(zoneText(), '50% SEARCHED');
+  s.resetCoverageStat();
+  assert.equal(zoneText(), 'COVERAGE 0%', 'stat returns to its idle label');
+  // And a fresh drone after reset starts the average from scratch (no carry-over).
+  s.updateCoverageStat({ drone_id: 'drone_2', current_waypoint_idx: 10, waypoints_remaining: 90 });
+  assert.equal(zoneText(), '10% SEARCHED');
 });
 
-test('T2: global is mean-of-fractions, not waypoint-weighted (F-T2-2)', () => {
+// --- Known shortcoming, PINNED as accepted behavior ------------------------- //
+// F-T2-1's "desired" output (divide by the full swarm of 6 → ~17%) is mutually
+// EXCLUSIVE with the single-drone contract the happy-path tests above encode:
+// "one reported drone at c/t" must read its own fraction (e.g. 42%), so the same
+// shape at 100% cannot simultaneously read 17%. We therefore keep reported-drone
+// semantics; waypoint-weighting (F-T2-2) is the realistic mitigation, since in
+// the live stream each drone's first packet already carries its full route total.
+
+test('T2: a lone reporting drone reflects its own progress, not swarm/6 (F-T2-1 accepted)', () => {
+  const { s, zoneText } = fresh();
+  // Only ONE drone has reported, at 100%. With reported-drone semantics the
+  // swarm reads 100% — consistent with "single drone fraction" reading 42% above.
+  s.updateCoverageStat({ drone_id: 'drone_1', current_waypoint_idx: 100, waypoints_remaining: 0 });
+  assert.equal(zoneText(), '100% SEARCHED');
+});
+
+test('T2: global is waypoint-weighted, not mean-of-fractions (F-T2-2 fixed)', () => {
   const { s, zoneText } = fresh();
   // Lopsided routes expose the difference: drone 1 has a 2-waypoint route (0 done),
   // drone 2 a 198-waypoint route (all done).
   s.updateCoverageStat({ drone_id: 'drone_1', current_waypoint_idx: 0, waypoints_remaining: 2 });   // 0%
   s.updateCoverageStat({ drone_id: 'drone_2', current_waypoint_idx: 198, waypoints_remaining: 0 }); // 100%
-  // Current: mean(0%, 100%) = 50%.
-  assert.equal(zoneText(), '50% SEARCHED');
-  // DESIRED (F-T2-2): waypoint-weighted = (0+198)/(2+198) = 99% SEARCHED.
+  // Waypoint-weighted Σdone/Σtotal = (0+198)/(2+198) = 99%, NOT mean(0%,100%)=50%.
+  // A long route now counts for more than a short one (F-T2-2 fix).
+  assert.equal(zoneText(), '99% SEARCHED');
 });

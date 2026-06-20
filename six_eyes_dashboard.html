@@ -506,10 +506,11 @@ function paintFootprint(x, y) {
   coverageCtx.fill();
 }
 
-// Records + draws one drone footprint. Guards against non-nav packets that
-// lack numeric x/y so the live GPS path is never affected.
+// Records + draws one drone footprint. Number.isFinite rejects undefined, NaN,
+// and Infinity (typeof NaN === 'number' would otherwise slip through), so a
+// malformed packet can never store junk or call arc() with a non-finite coord.
 function recordCoverage(x, y) {
-  if (typeof x !== 'number' || typeof y !== 'number') return;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
   coverageFootprints.push({ x, y });
   paintFootprint(x, y);
 }
@@ -837,6 +838,8 @@ function connect() {
   ws.onclose = () => {
     document.getElementById('connDot').classList.remove('live');
     document.getElementById('connText').textContent = 'RECONNECTING...';
+    // Drop stale coverage so a reconnect/new mission doesn't show old progress.
+    resetCoverageStat();
     setTimeout(connect, 2000);
   };
 
@@ -874,6 +877,15 @@ function handleNavTelemetry(pkt) {
 // (which holds full gps/health packets) since nav telemetry is its own stream.
 const coverageProgress = {};
 
+// A new WebSocket session means a new mission, so stale per-drone progress must
+// not carry over (F-T2-3). Task-2 scope only: this clears the coverage stat and
+// its tracker; the heatmap canvas is owned by Task 1 and is left untouched.
+function resetCoverageStat() {
+  for (const id of Object.keys(coverageProgress)) delete coverageProgress[id];
+  const el = document.getElementById('zoneCoverage');
+  if (el) el.textContent = 'COVERAGE 0%';
+}
+
 // Update one drone's waypoint progress from a navigation telemetry payload,
 // then recompute the global swarm coverage shown in the GPS panel header.
 function updateCoverageStat(telemetry) {
@@ -884,18 +896,25 @@ function updateCoverageStat(telemetry) {
   const remaining = Number(telemetry.waypoints_remaining) || 0;
   // Total route length = waypoints already hit + waypoints still ahead.
   let total = current + remaining;
-  // A drone reporting mission_complete has searched its whole route even if
-  // remaining momentarily reads 0/undefined — clamp so it counts as done.
-  if (telemetry.mission_complete) total = Math.max(total, current, 1);
+  let done = current;
+  // A drone reporting mission_complete has searched its whole route — count it
+  // as fully done even if current/remaining momentarily read 0 (F-T2-4).
+  if (telemetry.mission_complete) {
+    total = Math.max(total, 1);
+    done = total;
+  }
 
-  coverageProgress[id] = { current, total };
+  coverageProgress[id] = { current: done, total };
 
-  // Global swarm coverage = mean of each known drone's completion fraction,
-  // weighting every zone equally regardless of individual route length.
-  const tracked = Object.values(coverageProgress).filter(d => d.total > 0);
-  const globalPct = tracked.length
-    ? tracked.reduce((s, d) => s + d.current / d.total, 0) / tracked.length * 100
-    : 0;
+  // Global swarm coverage is WAYPOINT-WEIGHTED: Σ(done) / Σ(total) across every
+  // reporting drone (F-T2-2). This is a true "fraction of the planned search
+  // route completed", so a long route counts for more than a short one — unlike
+  // a plain mean of per-drone percentages, which weights a 2-waypoint sweep the
+  // same as a 200-waypoint one.
+  const tracked = Object.values(coverageProgress);
+  const totalWaypoints = tracked.reduce((s, d) => s + d.total, 0);
+  const doneWaypoints = tracked.reduce((s, d) => s + d.current, 0);
+  const globalPct = totalWaypoints > 0 ? (doneWaypoints / totalWaypoints) * 100 : 0;
 
   document.getElementById('zoneCoverage').textContent =
     `${globalPct.toFixed(0)}% SEARCHED`;
