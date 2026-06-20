@@ -17,8 +17,9 @@ dashboard's nav-telemetry surface
 *generation* stays entirely in ``coverage_planner.py``; this module only flies a
 pre-computed route.
 
-Coordinates are plain SIM_WORLD ``(x, y)`` units — the same space the planner
-emits and the dashboard maps onto its coverage canvas (``mapToCanvasX/Y``).
+Coordinates are route-local ``(x, y)`` units. Legacy missions use SIM_WORLD;
+Mapbox-drawn missions use ``(lng, lat)`` degrees. Default speed is scaled for
+small geographic routes so a city-scale polygon remains visible in the demo.
 """
 from __future__ import annotations
 
@@ -28,6 +29,38 @@ from typing import Dict, List, Optional, Tuple
 from . import config
 
 Waypoint = Tuple[float, float]
+
+
+def _path_length(waypoints: List[Waypoint]) -> float:
+    return sum(
+        math.hypot(x2 - x1, y2 - y1)
+        for (x1, y1), (x2, y2) in zip(waypoints, waypoints[1:])
+    )
+
+
+def _looks_like_small_lnglat_route(waypoints: List[Waypoint]) -> bool:
+    """Detect city-scale Mapbox routes without relabeling legacy SIM routes."""
+    if len(waypoints) < 2:
+        return False
+    xs = [pt[0] for pt in waypoints]
+    ys = [pt[1] for pt in waypoints]
+    if not all(math.isfinite(v) for v in xs + ys):
+        return False
+    if not all(-180 <= x <= 180 for x in xs) or not all(-90 <= y <= 90 for y in ys):
+        return False
+    if max(max(xs) - min(xs), max(ys) - min(ys)) > 1.0:
+        return False
+    # Avoid treating tiny local SIM test routes near the origin as geography.
+    return any(abs(x) > 1.0 for x in xs) or any(abs(y) > 1.0 for y in ys)
+
+
+def _default_speed_for_route(waypoints: List[Waypoint]) -> float:
+    if _looks_like_small_lnglat_route(waypoints):
+        duration = max(config.NAV_GEO_ROUTE_DURATION_S, 1.0)
+        length = _path_length(waypoints)
+        if length > 0:
+            return length / duration
+    return config.NAV_SPEED_UNITS_S
 
 
 class WaypointNavigator:
@@ -52,8 +85,10 @@ class WaypointNavigator:
         speed: Optional[float] = None,
         start: Optional[Waypoint] = None,
     ):
-        # Ground speed in SIM_WORLD units/second; defaulted from config so it's
-        # tunable. tick(dt) integrates against it.
+        # Ground speed in route units/second. Explicit speed is respected as-is.
+        # The default remains the legacy SIM_WORLD speed for large SIM routes,
+        # but city-scale Mapbox [lng, lat] routes are auto-paced in _load().
+        self._speed_explicit = speed is not None
         self.speed = config.NAV_SPEED_UNITS_S if speed is None else float(speed)
         self.active = False
         self._load(waypoints, start)
@@ -63,6 +98,8 @@ class WaypointNavigator:
         # Defensive copy: never alias the caller's list (the planner may reuse a
         # buffer; a later mutation must not corrupt an in-flight route).
         new_waypoints: List[Waypoint] = [(float(x), float(y)) for x, y in waypoints]
+        if not self._speed_explicit:
+            self.speed = _default_speed_for_route(new_waypoints)
         if start is not None:
             self.x, self.y = float(start[0]), float(start[1])
         elif new_waypoints:
