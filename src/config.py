@@ -89,6 +89,14 @@ VIDEO_JPEG_QUALITY = int(os.getenv("VIDEO_JPEG_QUALITY", "70"))
 WS_HOST = os.getenv("WS_HOST", "localhost")
 WS_PORT = int(os.getenv("WS_PORT", "8765"))
 
+# --- Dashboard ---------------------------------------------------------------
+# Mapbox GL JS runs in the browser, so the token must be delivered at runtime by
+# the local dashboard server rather than hardcoded into six_eyes_dashboard.html.
+MAPBOX_ACCESS_TOKEN = os.getenv("MAPBOX_ACCESS_TOKEN", "")
+DASHBOARD_HOST = os.getenv("DASHBOARD_HOST", "localhost")
+DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8000"))
+DASHBOARD_WS_URL = os.getenv("DASHBOARD_WS_URL", "")
+
 # --- Transport (Foundry REST secondary) -------------------------------------
 FOUNDRY_URL = os.getenv("FOUNDRY_URL", "")
 FOUNDRY_TOKEN = os.getenv("FOUNDRY_TOKEN", "")
@@ -102,6 +110,10 @@ FOUNDRY_ENABLED = os.getenv("FOUNDRY_ENABLED", "true").lower() == "true"
 # coverage canvas) and tick(dt) integrates against real wall-clock dt, so motion
 # is frame-rate independent. Tuned so a swept route is visibly traversed in-demo.
 NAV_SPEED_UNITS_S = float(os.getenv("NAV_SPEED_UNITS_S", "40"))
+# Small Mapbox routes use real-world lng/lat degrees instead of SIM_WORLD units.
+# navigation.py auto-scales those default-speed routes to this visible demo time
+# so a city-scale polygon does not complete in a single producer tick.
+NAV_GEO_ROUTE_DURATION_S = float(os.getenv("NAV_GEO_ROUTE_DURATION_S", "45"))
 # A drone is ticked every frame, but nav-telemetry is broadcast only every Nth
 # frame to keep the primary WebSocket path light (six feeds plus their video
 # already share it). ~8-10 Hz/drone is smooth motion on the map.

@@ -531,6 +531,7 @@ six-eyes/
 |
 ├── src/
 │   ├── main.py                 # Entry point — launches all threads + WS server
+│   ├── dashboard_server.py     # Serves dashboard + env-backed runtime config
 │   ├── producer.py             # drone_producer() + thread orchestration
 │   ├── inference.py            # YOLOv8n model load + run_detection()
 │   ├── simulators.py           # simulate_gps(), simulate_health()
@@ -568,10 +569,22 @@ python-dotenv==1.0.0
 # .env
 FOUNDRY_URL=https://your-instance.palantirfoundry.com
 FOUNDRY_TOKEN=your_bearer_token_here
+MAPBOX_ACCESS_TOKEN=your_restricted_mapbox_public_token_here
 DATASET_RID=ri.foundry.main.dataset.your-dataset-rid
 WS_HOST=localhost
 WS_PORT=8765
+DASHBOARD_HOST=localhost
+DASHBOARD_PORT=8000
+DASHBOARD_WS_URL=ws://localhost:8765
+NAV_GEO_ROUTE_DURATION_S=45
 MISSION_DURATION_S=600
+```
+
+Run the dashboard through the local config server so `MAPBOX_ACCESS_TOKEN` is
+loaded from `.env` instead of being hardcoded in `six_eyes_dashboard.html`:
+
+```
+python -m src.dashboard_server
 ```
  
 ---
