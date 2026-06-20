@@ -7,6 +7,7 @@ malformed payloads are rejected without dispatching or raising.
 import json
 
 import pytest
+from websockets.exceptions import ConnectionClosedError
 
 from src.transport import websocket_server as ws
 
@@ -99,3 +100,18 @@ def test_dispatch_ignores_garbage():
     asyncio.run(_dispatch(json.dumps(["a", "list", "not", "a", "dict"])))
     asyncio.run(_dispatch(json.dumps({"command": "BOGUS"})))
     assert called == []
+
+
+def test_register_swallows_normal_connection_closed_error():
+    import asyncio
+
+    class ClosedWebSocket:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise ConnectionClosedError(None, None)
+
+    websocket = ClosedWebSocket()
+    asyncio.run(ws.register(websocket))
+    assert websocket not in ws.CLIENTS
