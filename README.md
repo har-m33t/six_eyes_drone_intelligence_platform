@@ -578,8 +578,13 @@ DASHBOARD_PORT=8000
 DASHBOARD_WS_URL=ws://localhost:8765
 NAV_GEO_SPEED_DEG_S=0.00005
 NAV_GEO_TRANSIT_SPEED_DEG_S=0.0005
-MISSION_DURATION_S=600
+MISSION_DURATION_S=600   # vestigial — main.py now streams until Ctrl+C; see note below
 ```
+
+> **Note:** `MISSION_DURATION_S` no longer bounds the run. `main.py` streams
+> continuously until the operator interrupts with Ctrl+C; the variable is
+> retained only for backward compatibility and any external tooling (e.g. a
+> Foundry mission-summary transform) that still reads it.
 
 Run the dashboard through the local config server so `MAPBOX_ACCESS_TOKEN` is
 loaded from `.env` instead of being hardcoded in `six_eyes_dashboard.html`:
