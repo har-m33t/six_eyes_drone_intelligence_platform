@@ -111,9 +111,9 @@ FOUNDRY_ENABLED = os.getenv("FOUNDRY_ENABLED", "true").lower() == "true"
 # is frame-rate independent. Tuned so a swept route is visibly traversed in-demo.
 NAV_SPEED_UNITS_S = float(os.getenv("NAV_SPEED_UNITS_S", "40"))
 # Small Mapbox routes use real-world lng/lat degrees instead of SIM_WORLD units.
-# navigation.py auto-scales those default-speed routes to this visible demo time
-# so a city-scale polygon does not complete in a single producer tick.
-NAV_GEO_ROUTE_DURATION_S = float(os.getenv("NAV_GEO_ROUTE_DURATION_S", "45"))
+# Keep their default speed tiny so a city-scale polygon is swept gradually
+# instead of being crossed in one producer tick.
+NAV_GEO_SPEED_DEG_S = float(os.getenv("NAV_GEO_SPEED_DEG_S", "0.00005"))
 # A drone is ticked every frame, but nav-telemetry is broadcast only every Nth
 # frame to keep the primary WebSocket path light (six feeds plus their video
 # already share it). ~8-10 Hz/drone is smooth motion on the map.
