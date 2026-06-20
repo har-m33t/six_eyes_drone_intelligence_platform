@@ -15,6 +15,7 @@ import math
 from dataclasses import asdict
 
 import websockets
+from websockets.exceptions import ConnectionClosed
 
 from .. import config
 from ..coverage_planner import plan_mission
@@ -137,6 +138,11 @@ async def register(websocket):
         # (until it closes) and surfaces inbound command frames to route.
         async for raw in websocket:
             await _dispatch_command(raw)
+    except ConnectionClosed:
+        # Browser refreshes, sleeping tabs, and keepalive timeouts close the
+        # recv iterator with ConnectionClosedError. Treat that as normal client
+        # cleanup, not an unhandled server failure with a traceback.
+        pass
     finally:
         CLIENTS.discard(websocket)
 
