@@ -11,6 +11,7 @@ registered mission handler (see set_mission_handler / Task 3).
 """
 import asyncio
 import json
+import math
 from dataclasses import asdict
 
 import websockets
@@ -40,14 +41,27 @@ def set_mission_handler(handler):
     _mission_handler = handler
 
 
+def _is_finite_number(coord) -> bool:
+    """A usable coordinate is a real, finite int/float.
+
+    Rejects ``bool`` (a subclass of ``int`` — ``[True, False]`` would otherwise
+    sneak through as ``(1.0, 0.0)``) and non-finite ``NaN``/``±Inf`` (which
+    ``isinstance(_, float)`` accepts but which the planner turns into an empty,
+    silently-idle mission). See GAPs 1 & 2 in deploy-swarm-integration.md.
+    """
+    if isinstance(coord, bool) or not isinstance(coord, (int, float)):
+        return False
+    return math.isfinite(coord)
+
+
 def _is_valid_polygon(polygon) -> bool:
-    """A usable polygon is a list of at least three [x, y] numeric vertices."""
+    """A usable polygon is a list of at least three [x, y] finite-numeric vertices."""
     if not isinstance(polygon, (list, tuple)) or len(polygon) < 3:
         return False
     for vertex in polygon:
         if not isinstance(vertex, (list, tuple)) or len(vertex) != 2:
             return False
-        if not all(isinstance(coord, (int, float)) for coord in vertex):
+        if not all(_is_finite_number(coord) for coord in vertex):
             return False
     return True
 
@@ -61,22 +75,30 @@ def _handle_start_mission(message: dict):
     """
     polygon = message.get("polygon")
     if not _is_valid_polygon(polygon):
-        print(f"[WS] START_MISSION rejected — invalid polygon: {polygon!r}")
+        print(f"[WS] START_MISSION rejected -- invalid polygon: {polygon!r}")
         return None
 
     # Normalise vertices to plain (x, y) float tuples for shapely/the planner.
     polygon_coords = [(float(x), float(y)) for x, y in polygon]
-    mission_plan = plan_mission(polygon_coords=polygon_coords, num_drones=NUM_DRONES)
+
+    # Guard the planner call too, not just the handler below: a geometry fault on
+    # a structurally-valid polygon must be contained here, otherwise it unwinds
+    # through _dispatch_command's recv loop and kills the client socket (GAP 3).
+    try:
+        mission_plan = plan_mission(polygon_coords=polygon_coords, num_drones=NUM_DRONES)
+    except Exception as exc:
+        print(f"[WS] START_MISSION planning failed, mission not started: {exc!r}")
+        return None
 
     assigned = sum(1 for path in mission_plan.values() if path)
     total_waypoints = sum(len(path) for path in mission_plan.values())
     print(
-        f"[WS] START_MISSION planned — {len(polygon_coords)} vertices -> "
+        f"[WS] START_MISSION planned -- {len(polygon_coords)} vertices -> "
         f"{total_waypoints} waypoints across {assigned}/{NUM_DRONES} drones."
     )
 
     if _mission_handler is None:
-        print("[WS] No mission handler registered — plan not actioned (Task 3 pending).")
+        print("[WS] No mission handler registered -- plan not actioned (Task 3 pending).")
         return mission_plan
 
     try:
