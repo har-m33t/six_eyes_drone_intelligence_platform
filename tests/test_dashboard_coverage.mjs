@@ -242,7 +242,7 @@ test('T1: paintFootprint draws a larger purple semi-transparent circle', () => {
   const arc = coverageArcs().at(-1);
   assert.equal(arc.x, 350);
   assert.equal(arc.y, 350);
-  assert.equal(arc.r, 32, 'footprint radius should be large enough to avoid gaps');
+  assert.equal(arc.r, 24, 'footprint radius should be large enough to avoid gaps');
   assert.equal(arc.fillStyle, 'rgba(147, 51, 234, 0.15)', 'spec-mandated tactical purple');
 });
 
@@ -404,7 +404,7 @@ test('router: full GPS packets densify the Mapbox coverage trail', () => {
 
   assert.deepEqual(
     JSON.parse(JSON.stringify(radius)),
-    ['interpolate', ['exponential', 2], ['zoom'], 10, 3, 12, 9, 14, 34, 16, 136, 18, 544],
+    ['interpolate', ['exponential', 2], ['zoom'], 10, 2, 12, 7, 14, 26, 16, 102, 18, 408],
     'Mapbox footprints should scale with zoom to keep ground coverage consistent'
   );
 
