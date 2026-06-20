@@ -151,13 +151,15 @@ def test_reset_navigators_clears_the_registry():
     assert all(producer.get_navigator(f"DRONE_{i}") is None for i in range(1, NUM + 1))
 
 
-def test_redeploy_repositions_existing_navigator_onto_new_route():
-    producer.inject_mission({"drone_1": [(0.0, 0.0), (100.0, 0.0)]})
+def test_redeploy_keeps_current_position_and_transits_to_new_route():
+    producer._remember_gps("DRONE_1", {"lng": -117.84, "lat": 33.67, "alt": 75.0})
+    producer.inject_mission({"drone_1": [(-117.83, 33.67), (-117.82, 33.67)]})
     first = producer.get_navigator("DRONE_1")
-    producer.inject_mission({"drone_1": [(500.0, 500.0), (600.0, 500.0)]})
+    producer.inject_mission({"drone_1": [(-117.81, 33.68), (-117.80, 33.68)]})
     second = producer.get_navigator("DRONE_1")
     assert second is first, "redeploy should update the same navigator instance"
-    assert (second.x, second.y) == (500.0, 500.0)
+    assert (second.x, second.y) == (-117.84, 33.67)
+    assert second.waypoints[:2] == [(-117.84, 33.67), (-117.81, 33.68)]
 
 
 # --------------------------------------------------------------------------- #
