@@ -114,6 +114,7 @@ NAV_SPEED_UNITS_S = float(os.getenv("NAV_SPEED_UNITS_S", "40"))
 # Keep their default speed tiny so a city-scale polygon is swept gradually
 # instead of being crossed in one producer tick.
 NAV_GEO_SPEED_DEG_S = float(os.getenv("NAV_GEO_SPEED_DEG_S", "0.00005"))
+NAV_GEO_TRANSIT_SPEED_DEG_S = float(os.getenv("NAV_GEO_TRANSIT_SPEED_DEG_S", "0.0005"))
 # A drone is ticked every frame, but nav-telemetry is broadcast only every Nth
 # frame to keep the primary WebSocket path light (six feeds plus their video
 # already share it). ~8-10 Hz/drone is smooth motion on the map.
