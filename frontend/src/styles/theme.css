@@ -1,0 +1,61 @@
+/*
+ * SIX-EYES tactical design system — shared CSS custom properties.
+ *
+ * Reverse-engineered verbatim from the legacy `six_eyes_dashboard.html`
+ * `:root` block so every migrated module (Shell, TacticalMap, VideoGrid,
+ * IntelPanel) renders against the exact same black/purple palette, mono font,
+ * and 24px scanline grid. Output Constraint: "preserve the strict CSS
+ * dimensions and design constraints defined in the layout configuration."
+ *
+ * This file owns ONLY the design tokens + global reset/body. Component layout
+ * lives in each component's own stylesheet.
+ */
+
+:root {
+  /* Structural — black/void base */
+  --bg-void: #08070c;
+  --bg-panel: #0e0c16;
+  --bg-panel-raised: #15121f;
+  --line: #251f33;
+  --line-bright: #3a3150;
+  /* Primary accent — purple (replaced the old phosphor-green) */
+  --accent: #a78bfa;
+  --accent-dim: #6d5bb8;
+  --accent-glow: rgba(167, 139, 250, 0.35);
+  /* Severity system */
+  --amber: #ffb84d;
+  --red: #ff5c5c;
+  /* Text — slight purple tint, not pure white */
+  --text-primary: #e4ddf7;
+  --text-dim: #756f8c;
+  --mono: 'JetBrains Mono', 'Courier New', monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg-void);
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: 13px;
+  height: 100vh;
+  overflow: hidden;
+  background-image:
+    linear-gradient(rgba(167, 139, 250, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(167, 139, 250, 0.025) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-panel);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line-bright);
+}
