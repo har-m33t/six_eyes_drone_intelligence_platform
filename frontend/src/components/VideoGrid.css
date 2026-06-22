@@ -1,0 +1,146 @@
+/**
+ * Streaming video grid styling (Module C · Task C2).
+ * --------------------------------------------------
+ * Lifted verbatim (dimensions/colours) from the legacy `six_eyes_dashboard.html`
+ * `.video-grid` / `.feed` rules so the migrated grid is pixel-identical, plus a
+ * small `.feed-yolo` overlay layer that did not exist in the vanilla build.
+ *
+ * Design tokens are referenced as `var(--token, #fallback)`: when DashboardShell
+ * (Task C1) introduces the global `:root` palette these inherit it; standalone
+ * (tests / isolated render) they fall back to the exact legacy hex values.
+ */
+
+/* ── Grid: strict 3×2 of exactly six feeds ── */
+.video-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 1px;
+  background: var(--line, #251f33);
+  padding: 1px;
+  min-height: 0; /* allow the grid to shrink inside a flex parent */
+}
+
+/* ── Single feed viewport ── */
+.feed {
+  position: relative;
+  background: #000;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.feed img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: saturate(0.85) contrast(1.05);
+  display: block;
+}
+
+/* NO SIGNAL placeholder (pre-first-frame neutral state). */
+.feed-placeholder {
+  color: var(--text-dim, #756f8c);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+.feed-placeholder .pulse {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--line-bright, #3a3150);
+  margin: 0 auto 8px;
+  animation: feed-pulse 2s infinite;
+}
+
+/* Top label band: drone id (left) + zone callsign (right). */
+.feed-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 6px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  background: linear-gradient(rgba(0, 0, 0, 0.75), transparent);
+  color: var(--accent, #a78bfa);
+}
+.feed-label .zone {
+  color: var(--text-dim, #756f8c);
+}
+
+/* Amber "PERSON DETECTED" badge — only mounted while LIVE + detections present. */
+.feed-detect-badge {
+  position: absolute;
+  bottom: 4px;
+  right: 6px;
+  z-index: 2;
+  font-size: 9px;
+  padding: 2px 6px;
+  background: rgba(255, 184, 77, 0.15);
+  border: 1px solid var(--amber, #ffb84d);
+  color: var(--amber, #ffb84d);
+  letter-spacing: 0.06em;
+}
+
+/* ── SIGNAL LOST / OFFLINE terminal state ── */
+/* Freeze the last frame in greyscale ("black/static") behind a red warning. The
+   greyscale is scoped to the <img> so the emergency text stays emergency-red. */
+.feed.offline img {
+  filter: grayscale(1) brightness(0.55);
+}
+.feed.offline::after {
+  content: 'SIGNAL LOST';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--red, #ff5c5c);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  background: rgba(255, 92, 92, 0.06);
+  border: 1px solid var(--red, #ff5c5c);
+}
+
+/* ── YOLO detection overlay (new in the React build) ── */
+/* An SVG layer sized to the panel. Its viewBox is the frame's native pixel
+   space and `preserveAspectRatio="xMidYMid slice"` reproduces the <img>'s
+   `object-fit: cover` exactly, so bounding boxes stay registered to the video
+   through any container resize. */
+.feed-yolo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: none;
+}
+.yolo-box {
+  fill: none;
+  stroke: var(--amber, #ffb84d);
+  stroke-width: 1.5;
+  /* Keep the box outline a constant 1.5px no matter the slice scale factor. */
+  vector-effect: non-scaling-stroke;
+}
+.yolo-tag {
+  fill: var(--amber, #ffb84d);
+  font-family: var(--mono, 'JetBrains Mono', 'Courier New', monospace);
+  letter-spacing: 0.04em;
+}
+
+@keyframes feed-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
