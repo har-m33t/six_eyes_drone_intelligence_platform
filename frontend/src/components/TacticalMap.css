@@ -1,0 +1,35 @@
+/*
+ * SIX-EYES Tactical Map styling (Module B · Task B1)
+ * --------------------------------------------------
+ * Black/purple tactical design system, ported verbatim from the legacy
+ * dashboard (`six_eyes_dashboard.html` :root + `.map-wrap` / `#map`). The map
+ * fills its parent panel and owns all pan/zoom input; later B-tasks draw their
+ * markers / footprint over this same surface.
+ */
+
+.tactical-map {
+  /* Tactical palette — keep in sync with the legacy :root tokens. */
+  --bg-void: #08070c;
+  --bg-panel: #0e0c16;
+  --bg-panel-raised: #15121f;
+  --accent: #a78bfa;
+  --accent-dim: #6d5bb8;
+  --accent-glow: rgba(167, 139, 250, 0.35);
+
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Dark base shows through before Mapbox tiles paint (legacy `.map-wrap`). */
+  background: #0a0812;
+  z-index: 0;
+}
+
+/* Keep Mapbox's own controls legible against the dark theme. */
+.tactical-map .mapboxgl-ctrl-group {
+  background: var(--bg-panel-raised);
+}
+
+.tactical-map .mapboxgl-ctrl-group button + button {
+  border-top-color: rgba(167, 139, 250, 0.18);
+}
