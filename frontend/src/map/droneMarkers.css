@@ -1,0 +1,79 @@
+/*
+ * SIX-EYES drone marker styles (Module B · Task B2)
+ * -------------------------------------------------
+ * Ported verbatim from the legacy `six_eyes_dashboard.html` (`.drone-marker`
+ * block + `marker-ping` keyframes) so the migrated dashboard keeps the exact
+ * black/purple tactical look and the same 14px glowing-dot dimensions — no
+ * layout shift (Output Constraint).
+ *
+ * The dot color is driven entirely by the `--marker-color` custom property,
+ * which `DroneMarkerCache` sets per drone status (purple ONLINE, amber WARNING,
+ * red CRITICAL). Imported by `droneMarkers.ts`; the shared design tokens
+ * (`--mono`, `--text-primary`) come from `styles/theme.css`.
+ */
+
+/* Glowing tactical dot used as each Mapbox Marker's HTML element. */
+.drone-marker {
+  --marker-color: #a78bfa;
+  position: relative;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--marker-color);
+  border: 1.5px solid rgba(8, 7, 12, 0.9);
+  box-shadow: 0 0 8px var(--marker-color), 0 0 16px var(--marker-color);
+  cursor: pointer;
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Soft expanding halo so live drones read as "active" against the dark map. */
+.drone-marker::before {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  border: 1px solid var(--marker-color);
+  opacity: 0.5;
+  animation: marker-ping 2.2s infinite;
+}
+
+/* Amber human-detection ring, toggled via the `.detected` class. */
+.drone-marker.detected {
+  border-color: #ffb84d;
+  box-shadow: 0 0 10px #ffb84d, 0 0 20px rgba(255, 184, 77, 0.5);
+}
+
+.drone-marker.detected::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  border: 1.5px solid #ffb84d;
+  box-shadow: 0 0 10px rgba(255, 184, 77, 0.55);
+}
+
+/* `D1`…`D6` callout to the right of the dot. */
+.drone-marker-label {
+  position: absolute;
+  top: 50%;
+  left: 16px;
+  transform: translateY(-50%);
+  font-family: var(--mono, 'JetBrains Mono', 'Courier New', monospace);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--text-primary, #e4ddf7);
+  text-shadow: 0 0 3px #000, 0 0 3px #000;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+@keyframes marker-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
