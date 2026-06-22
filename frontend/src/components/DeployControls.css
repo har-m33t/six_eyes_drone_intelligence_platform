@@ -1,0 +1,70 @@
+/*
+ * DeployControls styling — Module D · Task D1.
+ *
+ * Ported verbatim from the legacy `six_eyes_dashboard.html` `.deploy-controls`
+ * / `.deploy-hint` / `.deploy-btn` rules so the DEPLOY SWARM group keeps its
+ * exact dimensions, spacing, and black/purple tactical look. Design tokens come
+ * from `styles/theme.css` (imported once by the shell). No layout shift.
+ *
+ * Note: in the legacy single-file dashboard `.deploy-controls` carried
+ * `margin-left:auto` to push the group right within the header flex row. Here
+ * the DashboardShell wrapper (`.shell-header-slot.right`) already owns that
+ * right-alignment, so this group fills its slot without re-declaring the
+ * margin — kept as a no-op comment to flag the intentional difference.
+ */
+
+.deploy-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.deploy-hint {
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.deploy-hint.armed {
+  color: var(--accent);
+}
+.deploy-hint.error {
+  color: var(--amber);
+}
+
+.deploy-btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: rgba(167, 139, 250, 0.1);
+  border: 1px solid var(--accent-dim);
+  padding: 7px 16px;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+.deploy-btn:hover:not(:disabled) {
+  background: rgba(167, 139, 250, 0.2);
+  border-color: var(--accent);
+}
+.deploy-btn:disabled {
+  color: var(--text-dim);
+  background: transparent;
+  border-color: var(--line);
+  cursor: not-allowed;
+}
+
+/* Secondary/ghost action (DRAW AREA, CLEAR) — neutral until hovered. */
+.deploy-btn.ghost {
+  color: var(--text-dim);
+  background: transparent;
+  border-color: var(--line);
+  font-weight: 400;
+}
+.deploy-btn.ghost:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--line-bright);
+  background: transparent;
+}
