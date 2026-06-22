@@ -1,0 +1,197 @@
+/*
+ * IntelPanel styling (Module C · Task C3).
+ * ----------------------------------------
+ * Ported from the legacy `six_eyes_dashboard.html` `.ai-strip` family and
+ * extended with a scrolling `.intel-stream` log + a `.intel-metric` counter for
+ * the "% SEARCHED" stat. Uses the shared design tokens from `styles/theme.css`
+ * (imported once via DashboardShell) so the black/purple system is unchanged.
+ */
+
+.intel-strip {
+  width: 100%;
+  height: 100%;
+  background: var(--bg-panel-raised);
+  border-top: 2px solid var(--accent);
+  padding: 14px 22px;
+  display: flex;
+  align-items: stretch;
+  gap: 18px;
+  min-height: 78px;
+  transition: background 0.5s ease, border-color 0.5s ease;
+  position: relative;
+  overflow: hidden;
+}
+.intel-strip.warning {
+  background: rgba(255, 184, 77, 0.08);
+  border-top-color: var(--amber);
+}
+.intel-strip.critical {
+  background: rgba(255, 92, 92, 0.1);
+  border-top-color: var(--red);
+}
+
+/* ── Pulsing AI glyph (legacy `.ai-icon`) ── */
+.intel-icon {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  align-self: center;
+  border: 1.5px solid var(--accent-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  color: var(--accent);
+  position: relative;
+}
+.intel-icon::before {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  border: 1px solid var(--accent-dim);
+  opacity: 0.4;
+  animation: intel-ring 2.4s infinite;
+}
+@keyframes intel-ring {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+
+/* ── Content column: meta row + scrolling stream ── */
+.intel-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.intel-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.intel-title {
+  color: var(--text-dim);
+}
+.intel-source-badge {
+  font-size: 8.5px;
+  padding: 2px 7px;
+  letter-spacing: 0.08em;
+  border: 1px solid var(--line-bright);
+  color: var(--text-dim);
+}
+.intel-source-badge.live {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: rgba(167, 139, 250, 0.1);
+}
+.intel-timestamp {
+  margin-left: auto;
+}
+
+/* ── Scrolling log stream ── */
+.intel-stream {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 4px;
+}
+.intel-line {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+.intel-line.placeholder {
+  color: var(--text-dim);
+}
+.intel-line-time {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+  min-width: 64px;
+}
+.intel-line-text {
+  min-width: 0;
+}
+/* Inline severity highlights (legacy `.ai-text .hl` / `.crit-hl`). */
+.intel-line-text .hl {
+  color: var(--amber);
+}
+.intel-line-text .crit-hl {
+  color: var(--red);
+  font-weight: 600;
+}
+/* Dim older lines so the newest (active) line reads as the headline. */
+.intel-line:not(:last-child) {
+  opacity: 0.55;
+}
+
+/* ── "% SEARCHED" system metric ── */
+.intel-metric {
+  flex-shrink: 0;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 18px;
+  border-left: 1px solid var(--line);
+}
+.intel-metric-value {
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--accent);
+  text-shadow: 0 0 8px var(--accent-glow);
+  line-height: 1;
+}
+.intel-metric-label {
+  margin-top: 4px;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+}
+
+/* ── Severity timeline (legacy `.ai-timeline`) ── */
+.intel-timeline {
+  flex-shrink: 0;
+  align-self: center;
+  display: flex;
+  gap: 4px;
+  align-items: flex-end;
+  height: 36px;
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+}
+.intel-timeline-bar {
+  width: 4px;
+  background: var(--line-bright);
+  border-radius: 1px;
+  transition: height 0.3s ease, background 0.3s ease;
+}
+.intel-timeline-bar.warning {
+  background: var(--amber);
+}
+.intel-timeline-bar.critical {
+  background: var(--red);
+}
+.intel-timeline-bar.normal {
+  background: var(--accent-dim);
+}
