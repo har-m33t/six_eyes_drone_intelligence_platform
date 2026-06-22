@@ -1,0 +1,147 @@
+/*
+ * DashboardShell layout — the structural chrome of the SIX-EYES dashboard.
+ *
+ * Geometry is lifted 1:1 from the legacy `six_eyes_dashboard.html` so the React
+ * shell occupies the same pixel/fr footprint:
+ *   - 48px header bar
+ *   - grid: columns 1.4fr / 1fr / 0.85fr, rows 1fr / auto, gap 1px on --line
+ *   - three column panels (video / map / fleet) + a full-width AI strip
+ *
+ * This file is layout-only. The interactive innards (video feeds, Mapbox
+ * canvas, intel logs) arrive via slot props from Modules B / C2 / C3.
+ */
+
+/* ── Header ── */
+.shell-header {
+  height: 48px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  background: var(--bg-panel);
+  gap: 24px;
+}
+
+.shell-logo {
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  text-shadow: 0 0 8px var(--accent-glow);
+}
+.shell-logo span {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+/* Header slot wrappers — keep the legacy spacing so plugged-in controls
+   (conn status, deploy buttons, mission clock) land in the right place.
+   The first auto-margin pushes everything after the logo to the right edge,
+   mirroring the legacy `.deploy-controls { margin-left: auto }`. */
+.shell-header-slot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.shell-header-slot.right {
+  margin-left: auto;
+}
+
+/* ── Layout grid ── */
+.shell-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 0.85fr;
+  grid-template-rows: 1fr auto;
+  height: calc(100vh - 48px);
+  gap: 1px;
+  background: var(--line);
+}
+
+.shell-panel {
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  grid-row: 1;
+}
+
+.shell-panel-head {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.shell-panel-head .count {
+  color: var(--accent-dim);
+}
+
+/* Panel body — the slot region a downstream module fills. flex:1 so it
+   consumes the panel below its header, matching the legacy `.video-grid`,
+   `.map-wrap`, `.health-list` flex behaviour. */
+.shell-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ── AI strip (full-width bottom row) ── */
+.shell-ai-strip {
+  grid-column: 1 / 4;
+  background: var(--bg-panel-raised);
+  border-top: 2px solid var(--accent);
+  min-height: 78px;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ── Placeholder (shown until a module mounts into the slot) ── */
+.shell-placeholder {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-dim);
+  background:
+    repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 9px,
+      rgba(167, 139, 250, 0.03) 9px,
+      rgba(167, 139, 250, 0.03) 10px
+    );
+  border: 1px dashed var(--line-bright);
+  margin: 1px;
+}
+.shell-placeholder .ph-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--line-bright);
+  animation: shell-ph-pulse 2s infinite;
+}
+.shell-placeholder .ph-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.shell-placeholder .ph-hint {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--line-bright);
+}
+
+@keyframes shell-ph-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
