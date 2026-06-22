@@ -36,3 +36,6 @@ footage_raw/
 Thumbs.db
 .idea/
 .vscode/
+
+# Node modules 
+*.frontend\node_modules
