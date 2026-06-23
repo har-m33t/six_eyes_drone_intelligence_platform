@@ -17,9 +17,11 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.inference import warmup
-from src.producer import inject_mission, launch_producers, reset_navigators
+from src.producer import (
+    inject_mission, kill_drone, launch_producers, reset_navigators)
 from src.transport.foundry_client import DualSinkSender
-from src.transport.websocket_server import serve_forever, set_mission_handler
+from src.transport.websocket_server import (
+    serve_forever, set_kill_handler, set_mission_handler)
 
 
 def _run_ws_loop(loop):
@@ -33,6 +35,7 @@ def main():
     # router must inject the plan instead of logging "no handler registered".
     reset_navigators()
     set_mission_handler(inject_mission)
+    set_kill_handler(kill_drone)
 
     # Run the asyncio WebSocket server in a dedicated thread and hand its loop
     # to the (synchronous) producer threads via run_coroutine_threadsafe.
