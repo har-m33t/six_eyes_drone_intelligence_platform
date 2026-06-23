@@ -125,6 +125,32 @@ describe('VideoFeed render states', () => {
     expect(container.querySelector('.feed-placeholder')).toBeNull();
     expect(container.querySelector('.feed')!.classList.contains('offline')).toBe(true);
   });
+
+  it('OFFLINE renders the SIGNAL LOST emergency warning as a real, accessible node', () => {
+    // Regression: the warning used to be a CSS `::after` content string, so it
+    // was absent from the DOM/accessibility tree and unassertable. It must now
+    // be a real `role="alert"` element, present whether or not a frame exists.
+    const withFrame = render(
+      <VideoFeed droneId="DRONE_1" zone="ALPHA" status="OFFLINE" frame={FAKE_FRAME_B64} />,
+    );
+    expect(withFrame.getByRole('alert')).toHaveTextContent('SIGNAL LOST');
+    withFrame.unmount();
+
+    const noFrame = render(<VideoFeed droneId="DRONE_1" zone="ALPHA" status="OFFLINE" />);
+    expect(noFrame.getByText('SIGNAL LOST')).toBeInTheDocument();
+  });
+
+  it('does NOT show the SIGNAL LOST warning when LIVE or NO_SIGNAL', () => {
+    const live = render(
+      <VideoFeed droneId="DRONE_1" zone="ALPHA" status="LIVE" frame={FAKE_FRAME_B64} />,
+    );
+    expect(live.queryByText('SIGNAL LOST')).toBeNull();
+    expect(live.queryByRole('alert')).toBeNull();
+    live.unmount();
+
+    const idle = render(<VideoFeed droneId="DRONE_1" zone="ALPHA" status="NO_SIGNAL" />);
+    expect(idle.queryByText('SIGNAL LOST')).toBeNull();
+  });
 });
 
 // ── VideoFeed — detection badge + YOLO overlay ─────────────────────────────

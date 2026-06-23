@@ -104,6 +104,15 @@ export function VideoFeed({
         <YoloOverlay frameSize={frameSize} detections={detections} />
       )}
 
+      {isOffline && (
+        // Real DOM node (not a CSS ::after) so the emergency warning is in the
+        // accessibility tree — `role="alert"` makes it an assertive live region —
+        // and is assertable in tests. Renders over the frozen/black frame.
+        <div className="feed-offline-overlay" role="alert">
+          SIGNAL LOST
+        </div>
+      )}
+
       <div className="feed-label">
         <span>{shortDroneLabel(droneId)}</span>
         <span className="zone">{zone}</span>

@@ -94,8 +94,9 @@
 .feed.offline img {
   filter: grayscale(1) brightness(0.55);
 }
-.feed.offline::after {
-  content: 'SIGNAL LOST';
+/* Emergency warning is a real DOM element (`role="alert"`), NOT a CSS ::after
+   content string, so it is in the accessibility tree and assertable in tests. */
+.feed-offline-overlay {
   position: absolute;
   inset: 0;
   z-index: 3;
@@ -107,6 +108,7 @@
   letter-spacing: 0.1em;
   background: rgba(255, 92, 92, 0.06);
   border: 1px solid var(--red, #ff5c5c);
+  pointer-events: none;
 }
 
 /* ── YOLO detection overlay (new in the React build) ── */
