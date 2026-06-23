@@ -22,6 +22,10 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { Map as MapboxMap } from 'mapbox-gl';
 import MapboxDraw from '@mapbox/mapbox-gl-draw';
+// Side-effect stylesheet for the draw toolbar (polygon/trash buttons + vertex
+// handles). The legacy dashboard loaded this via a `<link>`; under Vite it must
+// be imported here or the controls mount invisible/unstyled.
+import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
 import type { LngLat } from '../types/telemetry';
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -108,9 +112,13 @@ export function useMapboxDraw({
 }: UseMapboxDrawOptions): MapboxDrawHandle {
   const drawRef = useRef<MapboxDraw | null>(null);
 
-  // Keep the latest callback without re-subscribing the draw.* listeners.
+  // Keep the latest callback without re-subscribing the draw.* listeners. The
+  // write lives in an effect (not the render body) so a discarded concurrent
+  // render can't leave the ref pointing at a stale callback.
   const onPerimeterDrawnRef = useRef(onPerimeterDrawn);
-  onPerimeterDrawnRef.current = onPerimeterDrawn;
+  useEffect(() => {
+    onPerimeterDrawnRef.current = onPerimeterDrawn;
+  });
 
   // Stable handle — identity never changes, so consumers can pass it freely.
   const handle = useMemo<MapboxDrawHandle>(
@@ -126,7 +134,11 @@ export function useMapboxDraw({
       startDrawing() {
         const draw = drawRef.current;
         if (!draw) return;
+        // deleteAll() is silent (no draw.delete event — see mapbox-gl-draw
+        // api.js), so notify consumers the old perimeter is gone, matching
+        // clear(), before entering draw mode for the replacement polygon.
         draw.deleteAll();
+        onPerimeterDrawnRef.current?.([]);
         draw.changeMode('draw_polygon');
       },
       clear() {
