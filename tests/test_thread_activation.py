@@ -237,3 +237,40 @@ def test_no_handler_means_no_navigators_armed():
     rect = [[0, 0], [100, 0], [100, 50], [0, 50]]
     ws._handle_start_mission({"command": "START_MISSION", "polygon": rect})
     assert all(producer.get_navigator(f"DRONE_{i}") is None for i in range(1, 7))
+
+
+# --------------------------------------------------------------------------- #
+# KILL_DRONE (Task D2 backend): frame -> router -> producer.kill_drone -> the
+# drone's stop Event, which makes its producer loop exit and emit SIGNAL LOST.
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def restore_stop_events():
+    """kill_drone mutates the shared producer.stop_events; snapshot the targeted
+    flags and clear them afterwards so a kill never leaks into other suites."""
+    yield
+    for event in producer.stop_events.values():
+        event.clear()
+
+
+def test_kill_drone_sets_stop_event(restore_stop_events):
+    assert not producer.stop_events["DRONE_3"].is_set()
+    assert producer.kill_drone("DRONE_3") is True
+    assert producer.stop_events["DRONE_3"].is_set()
+    # Idempotent: re-killing an already-stopped drone is a harmless no-op.
+    assert producer.kill_drone("drone_3") is True  # case-normalised, still True
+
+
+def test_kill_drone_unknown_id_is_ignored(restore_stop_events):
+    assert producer.kill_drone("DRONE_99") is False
+    assert producer.kill_drone(None) is False
+
+
+def test_kill_drone_frame_kills_targeted_drone_end_to_end(restore_stop_events):
+    ws.set_kill_handler(producer.kill_drone)
+    try:
+        ws._handle_kill_drone({"command": "KILL_DRONE", "drone_id": "DRONE_3"})
+        assert producer.stop_events["DRONE_3"].is_set()
+        # Only the targeted drone is affected.
+        assert not producer.stop_events["DRONE_1"].is_set()
+    finally:
+        ws.set_kill_handler(None)
