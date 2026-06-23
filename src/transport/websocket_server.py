@@ -33,6 +33,13 @@ NUM_DRONES = len(config.DRONE_IDS)
 # (the command is still validated/planned and logged, just not actioned).
 _mission_handler = None
 
+# Hook the thread manager registers to receive a KILL_DRONE request: a single
+# normalised drone id (e.g. "DRONE_3") to force OFFLINE. Same decoupling rationale
+# as _mission_handler — the router validates/logs the command; whoever registers
+# decides how to action it (producer.kill_drone sets the per-drone stop Event).
+# None = no consumer yet (the command is still validated and logged).
+_kill_handler = None
+
 
 def set_mission_handler(handler):
     """Register a callable invoked with the per-drone waypoint plan whenever a
@@ -40,6 +47,15 @@ def set_mission_handler(handler):
     """
     global _mission_handler
     _mission_handler = handler
+
+
+def set_kill_handler(handler):
+    """Register a callable invoked with a single drone id whenever a valid
+    KILL_DRONE arrives (the dashboard's signal-lost demo control, README §9).
+    Pass None to clear it.
+    """
+    global _kill_handler
+    _kill_handler = handler
 
 
 def _is_finite_number(coord) -> bool:
@@ -114,6 +130,41 @@ def _handle_start_mission(message: dict):
     return mission_plan
 
 
+def _handle_kill_drone(message: dict):
+    """Force a target drone OFFLINE from a KILL_DRONE payload (README §9
+    signal-lost demo control).
+
+    Returns the normalised drone id on a valid request (even if no handler is
+    registered, mirroring _handle_start_mission), or None if the payload was
+    rejected. Pure/synchronous and fully guarded so a malformed or hostile
+    command can never unwind through the recv loop and drop the client socket.
+    """
+    drone_id = message.get("drone_id")
+    if not isinstance(drone_id, str):
+        print(f"[WS] KILL_DRONE rejected -- drone_id not a string: {drone_id!r}")
+        return None
+
+    # Normalise to the canonical DRONE_N id and validate against the roster, so a
+    # typo'd / out-of-range target is dropped rather than silently mis-killing.
+    normalised = drone_id.strip().upper()
+    if normalised not in config.DRONE_IDS:
+        print(f"[WS] KILL_DRONE rejected -- unknown drone: {drone_id!r}")
+        return None
+
+    if _kill_handler is None:
+        print(f"[WS] KILL_DRONE received for {normalised} -- no kill handler registered.")
+        return normalised
+
+    try:
+        _kill_handler(normalised)
+    except Exception as exc:  # never let a handler fault kill the socket
+        print(f"[WS] Kill handler raised, drone not killed: {exc!r}")
+        return normalised
+
+    print(f"[WS] KILL_DRONE -- {normalised} forced OFFLINE.")
+    return normalised
+
+
 async def _dispatch_command(raw):
     """Parse one inbound text frame and route any recognised command."""
     try:
@@ -127,6 +178,8 @@ async def _dispatch_command(raw):
     command = message.get("command")
     if command == "START_MISSION":
         _handle_start_mission(message)
+    elif command == "KILL_DRONE":
+        _handle_kill_drone(message)
     elif command is not None:
         print(f"[WS] Ignoring unknown command: {command!r}")
 
