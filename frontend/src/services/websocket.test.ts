@@ -4,7 +4,8 @@
  * Drives the service against a controllable fake WebSocket (jsdom has none).
  * Covers lifecycle, exponential backoff + jitter, the offline command queue,
  * store wiring, and adversarial cases — including the stale-socket race
- * (BUG A3-1) where a CLOSING socket's delayed onclose orphans a newer socket.
+ * (A3-1, now fixed): connect() tears down any lingering CLOSING socket so its
+ * delayed onclose can no longer orphan a newer socket.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WebSocketService } from './websocket';
@@ -254,14 +255,15 @@ describe('reconnection backoff', () => {
 // ──────────────────────────────────────────────────────────────────────────
 
 describe('adversarial / stale-socket race', () => {
-  // BUG A3-1: the connect() idempotency guard only short-circuits on
-  // OPEN/CONNECTING, and handleClose/handleOpen never verify the event came from
-  // the CURRENT socket. If connect() runs while a previous socket is still
-  // CLOSING (the window after handleError's close() but before its onclose),
-  // a new socket is created; the OLD socket's delayed onclose then nulls
-  // `this.socket` (which now points at the NEW socket) and schedules yet another
-  // reconnect — orphaning the live socket and leaking a connection.
-  it('BUG A3-1: a CLOSING socket\'s delayed onclose orphans a newer socket', () => {
+  // A3-1 (FIXED): the connect() idempotency guard only short-circuits on
+  // OPEN/CONNECTING, so it can still be entered while a previous socket is
+  // CLOSING (the window after handleError's close() but before its onclose).
+  // connect() now tears that lingering socket down first — detaching its four
+  // handlers and closing it — before creating the new one. So the old socket's
+  // delayed onclose is a no-op (handler detached) and can no longer null
+  // `this.socket` (the new socket) nor schedule a spurious reconnect.
+  // See websocket.ts connect() + teardownSocket().
+  it('A3-1: a CLOSING socket\'s delayed onclose cannot orphan a newer socket', () => {
     vi.useFakeTimers();
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -275,24 +277,32 @@ describe('adversarial / stale-socket race', () => {
     sock0.drvError();
     expect(sock0.readyState).toBe(MockWebSocket.CLOSING);
 
-    // a consumer calls connect() during the CLOSING window (guard lets it
-    // through because CLOSING is neither OPEN nor CONNECTING) → instance 1
+    // a consumer calls connect() during the CLOSING window. connect() tears
+    // sock0 down (detaches handlers + closes it) and dials a fresh socket →
+    // instance 1. attempts were reset on sock0's open, so this is a clean
+    // 'connecting', not a 'reconnecting'.
     svc.connect();
     const sock1 = last();
     expect(sock1).not.toBe(sock0);
     expect(MockWebSocket.instances).toHaveLength(2);
+    expect(svc.getStatus()).toBe('connecting');
 
-    // NOW sock0's delayed onclose finally fires. A correct service would ignore
-    // it (it is not the current socket). This one nulls this.socket (== sock1)
-    // and schedules a reconnect.
+    // NOW sock0's delayed onclose finally fires — but its handler was detached
+    // by the teardown, so it is a no-op: this.socket (== sock1) is untouched and
+    // NO reconnect is scheduled.
     sock0.drvClose();
 
-    // Symptom: a reconnect was scheduled even though sock1 is alive & connecting.
-    expect(svc.getStatus()).toBe('reconnecting');
-    vi.advanceTimersByTime(1000);
+    expect(svc.getStatus()).toBe('connecting'); // NOT 'reconnecting'
+    vi.advanceTimersByTime(60_000);
 
-    // → a THIRD socket is spun up, and sock1 was never closed: it is leaked.
-    expect(MockWebSocket.instances).toHaveLength(3);
-    expect(sock1.closeCalls).toBe(0); // orphaned, still open, unmanaged
+    // No third socket; sock1 remains the single managed connection and was
+    // never closed. sock0 was closed by the teardown (≥1 close call).
+    expect(MockWebSocket.instances).toHaveLength(2);
+    expect(sock1.closeCalls).toBe(0);
+    expect(sock0.closeCalls).toBeGreaterThanOrEqual(1);
+
+    // sock1 is fully managed: opening it drives the store live as normal.
+    sock1.drvOpen();
+    expect(svc.getStatus()).toBe('live');
   });
 });
