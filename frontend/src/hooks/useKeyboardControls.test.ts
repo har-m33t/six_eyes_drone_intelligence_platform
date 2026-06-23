@@ -2,9 +2,10 @@
  * Code-review test suite — Module D · Task D2 (`useKeyboardControls`).
  *
  * Happy path (single-press kill, repeat guard, editable/modifier suppression)
- * plus "try to break it" cases pinning the review findings
- * (see `.claude/module_d_review.md`). Bug cases are tagged `[BUG D2-n]` and
- * assert the CURRENT behaviour.
+ * plus the two correctness findings from `.claude/module_d_review.md`
+ * (D2-1 keyup-interleaved auto-repeat flood, D2-2 killKey-change wedge). Those
+ * two were FIXED in the hook (press-transition set + time debounce); the cases
+ * below now assert the corrected behaviour and double as regression guards.
  *
  *   cd frontend && npm install && npm test
  */
@@ -14,6 +15,9 @@ import { renderHook } from '@testing-library/react';
 
 import { useKeyboardControls } from './useKeyboardControls';
 import type { WebSocketService } from '../services/websocket';
+
+/** Mirrors the hook's `DEFAULT_KILL_DEBOUNCE_MS`. */
+const DEBOUNCE_MS = 300;
 
 function makeService(sendResult = true) {
   const sendCommand = vi.fn(() => sendResult);
@@ -28,6 +32,7 @@ function keyup(key: string) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
   document.body.innerHTML = '';
 });
@@ -76,12 +81,14 @@ describe('useKeyboardControls — kill switch', () => {
     expect(sendCommand).toHaveBeenCalledTimes(1);
   });
 
-  it('re-arms after a clean keyup', () => {
+  it('re-arms after a clean keyup once the debounce window elapses', () => {
+    vi.useFakeTimers();
     const { service, sendCommand } = makeService();
     renderHook(() => useKeyboardControls({ service }));
 
     keydown('k');
     keyup('k');
+    vi.advanceTimersByTime(DEBOUNCE_MS + 50);
     keydown('k');
 
     expect(sendCommand).toHaveBeenCalledTimes(2);
@@ -130,45 +137,46 @@ describe('useKeyboardControls — kill switch', () => {
   });
 });
 
-// ── Break attempts / bug documentation ──────────────────────────────────────
+// ── Regression guards for the fixed review findings ─────────────────────────
 
-describe('useKeyboardControls — [BUG D2-1] latch cannot bound a keyup-interleaved burst', () => {
-  it('keydown/keyup/keydown (the X11 auto-repeat shape) fires TWICE', () => {
+describe('useKeyboardControls — [BUG D2-1 FIXED] keyup-interleaved auto-repeat is bounded', () => {
+  it('keydown/keyup/keydown (the X11 auto-repeat shape) fires only ONCE', () => {
     // On X11/Linux, auto-repeat emits a keyup between each repeated keydown and
-    // does NOT always set event.repeat. The per-press latch is released by that
-    // interleaved keyup, so the "exactly one frame per physical press" guarantee
-    // the hook documents does NOT hold there — event.repeat is the only real
-    // guard, and it is unreliable on those platforms.
+    // does NOT always set event.repeat — so a keyup-released latch (the old
+    // design) flooded the socket. The time debounce now swallows the re-fire
+    // inside the window, regardless of the interleaved keyup.
     const { service, sendCommand } = makeService();
     renderHook(() => useKeyboardControls({ service }));
 
     keydown('k'); // press
     keyup('k'); // synthetic release injected by X11 auto-repeat
-    keydown('k'); // auto-repeat, repeat flag NOT set
+    keydown('k'); // auto-repeat, repeat flag NOT set, within debounce window
 
-    expect(sendCommand).toHaveBeenCalledTimes(2);
+    expect(sendCommand).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('useKeyboardControls — [BUG D2-2] latch wedges when killKey changes mid-press', () => {
-  it('changing killKey between keydown and keyup permanently wedges the kill switch', () => {
+describe('useKeyboardControls — [BUG D2-2 FIXED] killKey change mid-press no longer wedges', () => {
+  it('re-arms after killKey is reconfigured between keydown and keyup', () => {
+    vi.useFakeTimers();
     const { service, sendCommand } = makeService();
     const { rerender } = renderHook((props: { killKey: string }) =>
       useKeyboardControls({ service, killKey: props.killKey }), {
       initialProps: { killKey: 'k' },
     });
 
-    keydown('k'); // fires; latch set under killKey='k'
+    keydown('k'); // fires under killKey='k'
     expect(sendCommand).toHaveBeenCalledTimes(1);
 
     // Rebind the kill key, THEN the operator releases the original key.
     rerender({ killKey: 'j' });
-    keyup('k'); // releaseLatch compares 'k' to killKey 'j' → does NOT release
+    keyup('k'); // clears the pressed flag for 'k' regardless of current killKey
 
-    // Rebind back and press again — latch is still stuck, so nothing fires.
+    // Rebind back, let the debounce window pass, and press again — NOT wedged.
     rerender({ killKey: 'k' });
+    vi.advanceTimersByTime(DEBOUNCE_MS + 50);
     keydown('k');
 
-    expect(sendCommand).toHaveBeenCalledTimes(1); // wedged — second press lost
+    expect(sendCommand).toHaveBeenCalledTimes(2); // re-armed correctly
   });
 });
