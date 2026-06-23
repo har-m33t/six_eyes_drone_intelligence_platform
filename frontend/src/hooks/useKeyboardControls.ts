@@ -11,18 +11,29 @@
  * the operator presses `K` on stage to force a drone OFFLINE and trigger the
  * SIGNAL-LOST overlay (Task C2) live, without touching the producer.
  *
- * "Thread-safe" in a browser
- * --------------------------
- * The DOM event loop is single-threaded, so there is no true concurrency to
- * guard against — but the spec's "thread-safe target frame" intent maps onto two
- * real hazards we DO defend against here:
- *   1. Key auto-repeat: holding `K` fires `keydown` continuously. We drop
- *      `event.repeat` frames AND re-entrancy is impossible because we send
- *      exactly once per physical press (see the `inFlight` latch below), so a
- *      single press never floods the socket with dozens of KILL frames.
- *   2. Text entry: the binding is suppressed while focus is in an editable
- *      element (input / textarea / contenteditable / select), so typing a "k"
- *      into the (future) deploy-notes field never kills a drone.
+ * Bounding a held key — "exactly one frame per press" (review BUG D2-1)
+ * --------------------------------------------------------------------
+ * The DOM event loop is single-threaded, so there is no true concurrency, but
+ * holding `K` can flood the socket with KILL frames. Two independent platforms
+ * produce auto-repeat differently and the hook must bound BOTH:
+ *   • Windows / macOS / Chromium: a held key fires a *keydown burst* with NO
+ *     interleaved keyup, and (usually) `event.repeat === true`.
+ *   • X11 / Linux: auto-repeat synthesises a `keyup`+`keydown` pair for every
+ *     repeat and frequently does NOT set `event.repeat`.
+ * An earlier design released a per-press latch on `keyup`, which the X11 keyup
+ * defeated — so the original "exactly once" guarantee did not hold there. This
+ * version guards on two orthogonal facts instead:
+ *   1. PRESS TRANSITION — a `pressed` set tracks physically-down kill keys, so a
+ *      keydown burst with no keyup (Windows/macOS) fires only on the up→down edge.
+ *   2. TIME DEBOUNCE — re-fires within `killDebounceMs` of the last dispatch are
+ *      dropped, which bounds the X11 keyup/keydown flood the press-set can't see.
+ * `keyup` only clears the pressed set (keyed on the RAW event key, never on a
+ * re-read of `killKey`), so reconfiguring `killKey` mid-press can no longer wedge
+ * the switch (review BUG D2-2).
+ *
+ * Text entry: the binding is suppressed while focus is in an editable element
+ * (input / textarea / contenteditable / select), so typing a "k" into the
+ * (future) deploy-notes field never kills a drone.
  *
  * Module-D decoupling
  * -------------------
@@ -44,6 +55,12 @@ import { webSocketService, type WebSocketService } from '../services/websocket';
 /** Default kill-switch binding for the live demo: `K` → `DRONE_3`. */
 const DEFAULT_KILL_KEY = 'k';
 const DEFAULT_KILL_TARGET: DroneId = 'DRONE_3';
+/**
+ * Default minimum gap between two kill dispatches. Long enough to swallow an
+ * auto-repeat burst (typical repeat rate is 30–60 ms) yet short enough that a
+ * deliberate second press feels instant.
+ */
+const DEFAULT_KILL_DEBOUNCE_MS = 300;
 
 export interface KeyboardControlsOptions {
   /**
@@ -58,6 +75,12 @@ export interface KeyboardControlsOptions {
   killKey?: string;
   /** Drone the kill switch targets. Defaults to `DRONE_3` (the rehearsed demo). */
   killTarget?: DroneId;
+  /**
+   * Minimum milliseconds between two kill dispatches. Re-fires inside this window
+   * are dropped, which bounds auto-repeat floods on every platform regardless of
+   * whether the OS emits interleaved `keyup`s. Defaults to 300 ms.
+   */
+  killDebounceMs?: number;
   /**
    * Service override — defaults to the global `webSocketService` singleton.
    * Injectable so the hook can be unit-tested against a fake sender without
@@ -112,10 +135,11 @@ export function useKeyboardControls(options: KeyboardControlsOptions = {}): void
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
-  // Per-press latch: set on the keydown that sends a frame, cleared on keyup
-  // (or blur). Guarantees ONE kill frame per physical press even if the browser
-  // somehow delivers a non-`repeat` keydown burst.
-  const inFlightRef = useRef(false);
+  // Physically-down kill keys (lower-cased). Lets a keydown burst with no keyup
+  // fire only on the up→down edge — the press-transition half of the D2-1 fix.
+  const pressedRef = useRef<Set<string>>(new Set());
+  // Timestamp (ms) of the last dispatched kill, for the debounce half of D2-1.
+  const lastFireRef = useRef<number>(Number.NEGATIVE_INFINITY);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -123,47 +147,56 @@ export function useKeyboardControls(options: KeyboardControlsOptions = {}): void
         enabled = true,
         killKey = DEFAULT_KILL_KEY,
         killTarget = DEFAULT_KILL_TARGET,
+        killDebounceMs = DEFAULT_KILL_DEBOUNCE_MS,
         service = webSocketService,
         onKill,
       } = optionsRef.current;
 
       if (!enabled) return;
-      // Ignore auto-repeat, text-entry contexts, and modifier combos so we never
-      // shadow browser/OS shortcuts (Ctrl/Cmd/Alt + K).
+      // Ignore explicit auto-repeat, text-entry contexts, and modifier combos so
+      // we never shadow browser/OS shortcuts (Ctrl/Cmd/Alt + K).
       if (event.repeat) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (isEditableTarget(event.target)) return;
-      if (event.key.toLowerCase() !== killKey.toLowerCase()) return;
 
-      // One frame per press: bail if this press already fired.
-      if (inFlightRef.current) return;
-      inFlightRef.current = true;
+      const key = event.key.toLowerCase();
+      if (key !== killKey.toLowerCase()) return;
+
+      // PRESS TRANSITION: already physically down ⇒ this is an auto-repeat
+      // keydown with no interleaved keyup (Windows/macOS). Drop it.
+      if (pressedRef.current.has(key)) return;
+      pressedRef.current.add(key);
+
+      // TIME DEBOUNCE: bounds the X11 keyup/keydown auto-repeat shape that the
+      // press set can't catch, and any other rapid re-fire.
+      const now = Date.now();
+      if (now - lastFireRef.current < killDebounceMs) return;
+      lastFireRef.current = now;
 
       event.preventDefault();
       const sent = service.sendCommand('KILL_DRONE', { drone_id: killTarget });
       onKill?.(killTarget, sent);
     };
 
-    // Release the latch when the key comes up (or focus leaves the window mid-
-    // press) so the NEXT deliberate press can fire again.
-    const releaseLatch = (event: KeyboardEvent): void => {
-      const { killKey = DEFAULT_KILL_KEY } = optionsRef.current;
-      if (event.key.toLowerCase() === killKey.toLowerCase()) {
-        inFlightRef.current = false;
-      }
+    // Clear the physically-down flag on release. Keyed on the RAW event key (not
+    // a re-read of `killKey`), so changing `killKey` mid-press cannot wedge the
+    // switch (BUG D2-2). `blur` clears everything in case a keyup is missed
+    // while the window is unfocused.
+    const handleKeyUp = (event: KeyboardEvent): void => {
+      pressedRef.current.delete(event.key.toLowerCase());
     };
-    const clearLatch = (): void => {
-      inFlightRef.current = false;
+    const handleBlur = (): void => {
+      pressedRef.current.clear();
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', releaseLatch);
-    window.addEventListener('blur', clearLatch);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', releaseLatch);
-      window.removeEventListener('blur', clearLatch);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
     };
   }, []);
 }
