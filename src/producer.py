@@ -38,6 +38,27 @@ def _plan_key_to_drone_id(plan_key) -> str:
     return str(plan_key).upper()
 
 
+def kill_drone(drone_id) -> bool:
+    """Kill a producer thread on demand — the dashboard's KILL_DRONE control
+    (README §9 signal-lost demo).
+
+    Sets the drone's stop Event; the producer loop exits on its next iteration and
+    emits a terminal SIGNAL LOST / CRITICAL packet, turning the tile/health/map
+    red. Idempotent (re-killing an already-stopped drone is a no-op) and tolerant
+    of an unknown/typo'd id (returns False instead of raising, so a hostile
+    command can't crash the WS router). Registered via
+    websocket_server.set_kill_handler in main().
+    """
+    key = _plan_key_to_drone_id(drone_id)
+    event = stop_events.get(key)
+    if event is None:
+        print(f"[producer] kill_drone ignored unknown drone: {drone_id!r}")
+        return False
+    event.set()
+    print(f"[producer] kill_drone -- {key} stop flag set.")
+    return True
+
+
 def _coerce_waypoints(waypoints):
     """Validate/normalise one drone's route into ``[(float, float), ...]``.
 
