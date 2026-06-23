@@ -150,11 +150,15 @@ export function IntelPanel({
   const stampMs = lastUpdatedMs ?? active?.timestamp ?? null;
   const pct = Number.isFinite(coveragePct) ? Math.round(coveragePct) : 0;
 
-  // Keep the newest line in view as the stream grows.
+  // Keep the newest line in view as the stream grows. Keyed on the newest
+  // entry's identity (NOT `logs.length`): once the connected container caps the
+  // stream at MAX_LOG_LINES the length plateaus, so a length dep would stop
+  // firing on new content. `logs` is a fresh array per append, and `active?.id`
+  // changes whenever the newest line does, so this re-scrolls on every new line.
   useEffect(() => {
     const el = streamRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [logs.length]);
+  }, [logs, active?.id]);
 
   const stripClass =
     'intel-strip' + (severity !== 'normal' ? ` ${severity}` : '');
@@ -224,18 +228,35 @@ export function IntelPanel({
 // ──────────────────────────────────────────────────────────────────────────
 
 /**
- * A fully-primitive descriptor of the current intel line. Returning only
- * primitives lets the store selector use `useShallow`, so `ConnectedIntelPanel`
- * re-derives a log entry ONLY when the meaningful situation changes — not on
- * every 20 Hz packet.
+ * The STABLE identity of the current intel situation — severity + what kind of
+ * event + which drone/zone. Deliberately excludes the volatile `value`
+ * (confidence/battery %, which wiggles ±1 every 20 Hz frame): this is the de-dup
+ * key, so a sustained detection whose confidence merely drifts is ONE event, not
+ * one log line per frame. Returning only primitives lets the store selector use
+ * `useShallow`, so `ConnectedIntelPanel` re-renders only when the situation
+ * (not the noisy value) actually changes.
  */
-interface IntelDescriptor {
+interface IntelKey {
   severity: IntelSeverity;
   kind: 'idle' | 'lost' | 'detection' | 'battery' | 'nominal';
   droneId: string;
   zone: string;
+}
+
+/**
+ * A full descriptor: the stable `IntelKey` plus the display-only `value`. The
+ * value is read FRESH at append time (when the situation transitions), so the
+ * logged line shows the confidence/battery at the moment the event began — but
+ * `value` never participates in de-dup (see `IntelKey`).
+ */
+interface IntelDescriptor extends IntelKey {
   /** confidence% (detection) | battery% (battery) | online count (nominal). */
   value: number;
+}
+
+/** Project the de-dup key out of a full descriptor (drops volatile `value`). */
+function intelKey(d: IntelDescriptor): IntelKey {
+  return { severity: d.severity, kind: d.kind, droneId: d.droneId, zone: d.zone };
 }
 
 /** Priority order matches the legacy strip: lost → detection → battery → nominal. */
@@ -337,21 +358,26 @@ export interface ConnectedIntelPanelProps {
 }
 
 /**
- * Wires the pure `IntelPanel` to the swarm store. The `useShallow` selector over
- * `deriveIntel` means this component re-renders only when the synthesized intel
- * descriptor actually changes, so the log gains exactly one entry per distinct
- * situation (mirroring the legacy de-dupe), never one per frame.
+ * Wires the pure `IntelPanel` to the swarm store. The `useShallow` selector
+ * returns only the STABLE `IntelKey` (no volatile `value`), so this component
+ * re-renders — and the log gains a line — exactly once per distinct situation
+ * (mirroring the legacy de-dupe), never one per 20 Hz frame even while a
+ * detection's confidence wiggles. The display `value` is read fresh from the
+ * store at append time, so the logged line still shows the confidence/battery at
+ * the moment the event began.
  */
 export function ConnectedIntelPanel({ sourceLive = false }: ConnectedIntelPanelProps = {}) {
-  const descriptor = useSwarmStore(useShallow((s) => deriveIntel(s.drones)));
+  const key = useSwarmStore(useShallow((s) => intelKey(deriveIntel(s.drones))));
   const coveragePct = useGlobalCoverage();
 
   const [logs, setLogs] = useState<IntelLogEntry[]>([]);
   const seqRef = useRef(0);
 
-  // `descriptor` keeps referential identity (useShallow) until the situation
-  // changes, so this effect appends exactly one capped log line per change.
+  // `key` keeps referential identity (useShallow) until the SITUATION changes,
+  // so this effect appends exactly one capped log line per change. Read the full
+  // descriptor (with the current value) fresh here rather than from `key`.
   useEffect(() => {
+    const descriptor = deriveIntel(useSwarmStore.getState().drones);
     const { text, segments } = formatIntel(descriptor);
     const entry: IntelLogEntry = {
       id: `${Date.now()}-${seqRef.current++}`,
@@ -364,7 +390,7 @@ export function ConnectedIntelPanel({ sourceLive = false }: ConnectedIntelPanelP
       const next = [...prev, entry];
       return next.length > MAX_LOG_LINES ? next.slice(-MAX_LOG_LINES) : next;
     });
-  }, [descriptor]);
+  }, [key]);
 
   return <IntelPanel logs={logs} coveragePct={coveragePct} sourceLive={sourceLive} />;
 }

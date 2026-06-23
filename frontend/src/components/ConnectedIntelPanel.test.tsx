@@ -114,12 +114,11 @@ describe('ConnectedIntelPanel % searched wiring', () => {
 // ── Documented bug: detection confidence churn spams the log ───────────────
 describe('ConnectedIntelPanel detection churn (BUG: confidence in descriptor)', () => {
   // The component's docstring claims "exactly one entry per distinct intel
-  // event, never one per frame." But `deriveIntel` puts rounded confidence in
-  // the descriptor, so a sustained detection whose confidence merely wiggles
-  // 1% per frame emits a NEW log line every frame. `it.fails` documents the
-  // gap between the claim and the behaviour — flip to `it` once the descriptor
-  // drops volatile confidence from the de-dup key.
-  it.fails('keeps a single line while one drone stays detected (confidence wiggles)', () => {
+  // event, never one per frame." FIXED: de-dup now keys on the stable
+  // `IntelKey` (severity/kind/droneId/zone) and excludes the volatile rounded
+  // confidence, so a sustained detection whose confidence wiggles 1% per frame
+  // keeps a single log line; the displayed value is read fresh at append time.
+  it('keeps a single line while one drone stays detected (confidence wiggles)', () => {
     pushPacket({ drone_id: 'DRONE_3', detections: [makeDetection({ confidence: 0.8 })] });
     const { container } = render(<ConnectedIntelPanel />);
     const before = logLines(container).length;

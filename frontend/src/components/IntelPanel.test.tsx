@@ -142,10 +142,10 @@ describe('IntelPanel autoscroll (BUG: keyed on logs.length)', () => {
   });
 
   // EXPECTED behaviour: a new line should always scroll the newest into view.
-  // ACTUAL: the effect depends on `logs.length`; once length is constant (e.g.
-  // after the connected container caps at MAX_LOG_LINES) new content does NOT
-  // re-trigger the scroll. `it.fails` documents this — flip to `it` when fixed.
-  it.fails('autoscrolls when the newest line changes but the count stays constant', () => {
+  // FIXED: the effect now keys on `[logs, active?.id]` instead of `logs.length`,
+  // so new content re-triggers the scroll even after the stream caps at
+  // MAX_LOG_LINES and the length plateaus.
+  it('autoscrolls when the newest line changes but the count stays constant', () => {
     const fifty = Array.from({ length: 50 }, () => line());
     const { rerender } = render(<IntelPanel logs={fifty} coveragePct={0} />);
     const afterMount = sets.length; // mount effect ran once
