@@ -19,8 +19,10 @@ RECT = [[0, 0], [100, 0], [100, 50], [0, 50]]
 def clear_handler():
     """Each test starts with no handler and restores it afterwards."""
     ws.set_mission_handler(None)
+    ws.set_kill_handler(None)
     yield
     ws.set_mission_handler(None)
+    ws.set_kill_handler(None)
 
 
 def test_start_mission_plans_and_dispatches():
@@ -100,6 +102,64 @@ def test_dispatch_ignores_garbage():
     asyncio.run(_dispatch(json.dumps(["a", "list", "not", "a", "dict"])))
     asyncio.run(_dispatch(json.dumps({"command": "BOGUS"})))
     assert called == []
+
+
+# --- KILL_DRONE routing (Task D2 backend) -----------------------------------
+
+
+def test_kill_drone_dispatches_normalised_id():
+    killed = []
+    ws.set_kill_handler(lambda drone_id: killed.append(drone_id))
+
+    # Lower-case / padded id is normalised to the canonical DRONE_N form.
+    result = ws._handle_kill_drone({"command": "KILL_DRONE", "drone_id": " drone_3 "})
+
+    assert result == "DRONE_3"
+    assert killed == ["DRONE_3"]
+
+
+def test_kill_drone_without_handler_still_validates():
+    # No handler registered: the command is still validated (just not actioned),
+    # and nothing raises.
+    result = ws._handle_kill_drone({"command": "KILL_DRONE", "drone_id": "DRONE_3"})
+    assert result == "DRONE_3"
+
+
+@pytest.mark.parametrize(
+    "drone_id",
+    [
+        None,            # missing
+        123,             # not a string
+        "",              # empty
+        "DRONE_9",       # out of range
+        "not_a_drone",   # unknown
+    ],
+)
+def test_kill_drone_invalid_target_rejected(drone_id):
+    called = []
+    ws.set_kill_handler(lambda d: called.append(d))
+    result = ws._handle_kill_drone({"command": "KILL_DRONE", "drone_id": drone_id})
+    assert result is None
+    assert called == []  # handler never fired on a bad target
+
+
+def test_kill_handler_exception_is_swallowed():
+    def boom(_drone_id):
+        raise RuntimeError("stop event injection failed")
+
+    ws.set_kill_handler(boom)
+    # A faulting kill handler must not propagate out of the router.
+    result = ws._handle_kill_drone({"command": "KILL_DRONE", "drone_id": "DRONE_3"})
+    assert result == "DRONE_3"
+
+
+def test_dispatch_routes_kill_drone():
+    import asyncio
+
+    killed = []
+    ws.set_kill_handler(lambda drone_id: killed.append(drone_id))
+    asyncio.run(_dispatch(json.dumps({"command": "KILL_DRONE", "drone_id": "DRONE_3"})))
+    assert killed == ["DRONE_3"]
 
 
 def test_register_swallows_normal_connection_closed_error():
