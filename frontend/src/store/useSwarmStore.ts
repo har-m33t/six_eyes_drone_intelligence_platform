@@ -121,6 +121,40 @@ function hasDetection(pkt: DronePacket): boolean {
   return Boolean(pkt.detections && pkt.detections.length > 0);
 }
 
+/**
+ * Per-packet `DronePosition` cache. Keyed by the `DronePacket` object identity so
+ * a drone whose packet did NOT change this tick yields the *same* `DronePosition`
+ * reference. That stability is what lets `useShallow` in `useDronePositions`
+ * actually short-circuit: without it, a fresh object literal per call is never
+ * `Object.is`-equal to the previous one, so the array would compare unequal and
+ * the hook would re-render on every unrelated store write. Returns `null` for a
+ * packet with no finite coordinate (the drone is then omitted). A `WeakMap` lets
+ * superseded packets be garbage-collected.
+ */
+const positionCache = new WeakMap<DronePacket, DronePosition | null>();
+
+function toPosition(pkt: DronePacket): DronePosition | null {
+  const cached = positionCache.get(pkt);
+  if (cached !== undefined) return cached;
+
+  const lng = packetLng(pkt);
+  const lat = pkt.gps?.lat;
+  const pos: DronePosition | null =
+    lng === null || !Number.isFinite(lat)
+      ? null // reject junk coords — drone omitted from the positions array
+      : {
+          id: pkt.drone_id,
+          lng,
+          lat: lat as number,
+          status: pkt.health.status,
+          hasDetection: hasDetection(pkt),
+          coverageActive: pkt.gps?.coverage_active !== false,
+        };
+
+  positionCache.set(pkt, pos);
+  return pos;
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Store
 // ──────────────────────────────────────────────────────────────────────────
@@ -135,12 +169,26 @@ export const useSwarmStore = create<SwarmState>((set, get) => ({
   alertCount: 0,
 
   ingest: (msg) => {
+    // Defensive: A3 already null/object-guards before calling, but `ingest` is a
+    // public action and A1's `isNavTelemetry` would throw on the `in` operator for
+    // a non-object. Ignore junk rather than throw (BUG A2-1c).
+    const m: unknown = msg;
+    if (typeof m !== 'object' || m === null) return;
     if (isNavTelemetry(msg)) get().applyNavTelemetry(msg);
     else get().applyDronePacket(msg);
   },
 
   applyDronePacket: (pkt) =>
     set((state) => {
+      // Drop a structurally-malformed frame instead of throwing (BUG A2-1a): a
+      // packet with no id or no `health` block can't drive any panel, so ignore
+      // it rather than crash the action (A3 swallows throws, but silently — this
+      // keeps the store itself robust and the failure explicit).
+      if (!pkt || !pkt.drone_id || !pkt.health) {
+        console.warn('[swarm-store] Ignoring drone packet with no drone_id/health.');
+        return {};
+      }
+
       const id = pkt.drone_id;
 
       // Count this as a NEW alert exactly once per (drone, status) transition,
@@ -188,7 +236,17 @@ export const useSwarmStore = create<SwarmState>((set, get) => ({
       return { coverage, globalCoveragePct };
     }),
 
-  setConnection: (status) => set({ connection: status }),
+  setConnection: (status) =>
+    set((state) => ({
+      connection: status,
+      // Start the mission clock on the first successful connect (legacy
+      // `ws.onopen`), so it counts from link-up, not from the first packet.
+      // Never reset once set (legacy `if (!missionStart)`).
+      missionStartMs:
+        status === 'live'
+          ? state.missionStartMs ?? Date.now()
+          : state.missionStartMs,
+    })),
 
   resetCoverage: () => set({ coverage: {}, globalCoveragePct: 0 }),
 
@@ -223,9 +281,11 @@ export const useMissionStart = (): number | null =>
   useSwarmStore((s) => s.missionStartMs);
 
 /**
- * Live drone positions for Module B (TacticalMap). `useShallow` compares the
- * derived array element-wise so the map's marker cache only updates when a
- * position/status actually changed, not on every unrelated store write.
+ * Live drone positions for Module B (TacticalMap). Each element comes from the
+ * identity-stable `toPosition` cache, so `useShallow` compares the array
+ * element-wise and the hook re-renders ONLY when a drone's packet actually
+ * changed — not on unrelated writes (connection, coverage, alerts). A drone with
+ * no finite coordinate is omitted.
  */
 export const useDronePositions = (): DronePosition[] =>
   useSwarmStore(
@@ -233,17 +293,8 @@ export const useDronePositions = (): DronePosition[] =>
       const out: DronePosition[] = [];
       for (const pkt of Object.values(s.drones)) {
         if (!pkt) continue;
-        const lng = packetLng(pkt);
-        const lat = pkt.gps?.lat;
-        if (lng === null || !Number.isFinite(lat)) continue; // reject junk coords
-        out.push({
-          id: pkt.drone_id,
-          lng,
-          lat: lat as number,
-          status: pkt.health.status,
-          hasDetection: hasDetection(pkt),
-          coverageActive: pkt.gps?.coverage_active !== false,
-        });
+        const pos = toPosition(pkt);
+        if (pos !== null) out.push(pos);
       }
       return out;
     }),
@@ -257,11 +308,16 @@ export const useFleetSummary = (): FleetSummary =>
         (d): d is DronePacket => Boolean(d),
       );
       const online = drones.filter(
-        (d) => d.health.status !== 'CRITICAL' && d.health.signal !== 'LOST',
+        (d) => d.health?.status !== 'CRITICAL' && d.health?.signal !== 'LOST',
       ).length;
       const detections = drones.reduce((n, d) => n + (d.detections?.length ?? 0), 0);
-      const avgBattery = drones.length
-        ? drones.reduce((n, d) => n + d.health.battery, 0) / drones.length
+      // Average ONLY over finite batteries (BUG A2-1b): a single drone with a
+      // partial/absent `battery` must not poison the whole-fleet readout to NaN.
+      const batteries = drones
+        .map((d) => d.health?.battery)
+        .filter((b): b is number => Number.isFinite(b));
+      const avgBattery = batteries.length
+        ? batteries.reduce((n, b) => n + b, 0) / batteries.length
         : 0;
       return { online, detections, avgBattery, alerts: s.alertCount };
     }),
