@@ -1,11 +1,11 @@
 /**
  * Code-review test suite — Module D · Task D1 (`useDeploySwarm`).
  *
- * Covers the happy path (vertex gating, hint ladder, deploy/clear/flash) AND a
- * set of "try to break it" cases that document the bugs found in the review
- * (see `.claude/module_d_review.md`). Bug-documenting cases are tagged
- * `[BUG D1-n]` and assert the CURRENT (buggy) behaviour so the suite stays green
- * and the regression is pinned; flip the assertion when the bug is fixed.
+ * Covers the happy path (vertex gating, hint ladder, deploy/clear/flash) AND the
+ * "try to break it" cases from the review (see `.claude/module_d_review.md`).
+ * The `[BUG D1-n]` cases were originally pinned to the buggy behaviour; the bugs
+ * are now FIXED (2026-06-22) and these cases assert the corrected behaviour, so
+ * they double as regression guards.
  *
  *   cd frontend && npm install && npm test
  */
@@ -171,11 +171,10 @@ describe('useDeploySwarm — clear & coverage reset', () => {
 
 // ── Break attempts / bug documentation ──────────────────────────────────────
 
-describe('useDeploySwarm — [BUG D1-1] resetCoverageOnDeploy mis-gates clear()', () => {
-  it('disabling reset-on-DEPLOY ALSO silently disables reset-on-CLEAR', () => {
-    // The single flag `resetCoverageOnDeploy` is (mis)used to gate the coverage
-    // reset inside clear() too. An operator who only wants to *keep* coverage on
-    // deploy unexpectedly loses the coverage wipe on CLEAR.
+describe('useDeploySwarm — [BUG D1-1 FIXED] clear() wipes coverage unconditionally', () => {
+  it('CLEAR resets coverage even when resetCoverageOnDeploy is false', () => {
+    // `resetCoverageOnDeploy:false` keeps coverage across a DEPLOY, but CLEAR
+    // means "start over" and must always wipe coverage regardless of the flag.
     useSwarmStore.setState({ globalCoveragePct: 73 });
     const { service } = makeService();
     const { result } = renderHook(() =>
@@ -185,15 +184,15 @@ describe('useDeploySwarm — [BUG D1-1] resetCoverageOnDeploy mis-gates clear()'
     act(() => result.current.onPerimeterDrawn(tri));
     act(() => result.current.clear());
 
-    // Perimeter still clears…
+    // Perimeter clears…
     expect(result.current.vertexCount).toBe(0);
-    // …but coverage is NOT reset (bug — name says "OnDeploy", behaviour leaks to clear).
-    expect(useSwarmStore.getState().globalCoveragePct).toBe(73);
+    // …and coverage is reset, unconditionally (fixed: flag only gates on-DEPLOY).
+    expect(useSwarmStore.getState().globalCoveragePct).toBe(0);
   });
 });
 
-describe('useDeploySwarm — [BUG D1-2] enable-gate vs deploy-gate use different sources', () => {
-  it('button can be ENABLED while deploy() fails, because canDeploy reads perimeter but deploy() reads draw.getPolygon()', () => {
+describe('useDeploySwarm — [BUG D1-2 FIXED] enable-gate and deploy() read the same source', () => {
+  it('button is DISABLED whenever deploy() would refuse, because both read draw.getPolygon()', () => {
     const { service, sendCommand } = makeService(true);
     // Draw handle reports an EMPTY polygon (e.g. a draw.delete the perimeter
     // state hasn't caught up to), while the buffered perimeter still has 3.
@@ -202,20 +201,20 @@ describe('useDeploySwarm — [BUG D1-2] enable-gate vs deploy-gate use different
 
     act(() => result.current.onPerimeterDrawn(tri));
 
-    // The DEPLOY button is enabled (gate reads the buffered perimeter)…
-    expect(result.current.canDeploy).toBe(true);
+    // The gate now reads the live draw geometry too, so it agrees with deploy().
+    expect(result.current.canDeploy).toBe(false);
 
     act(() => result.current.deploy());
 
-    // …yet deploy() validates the (empty) live geometry and refuses to send.
+    // deploy() validates the (empty) live geometry and refuses to send.
     expect(sendCommand).not.toHaveBeenCalled();
     expect(result.current.hint).toBe('NEED 3+ POINTS');
     expect(result.current.hintState).toBe('error');
   });
 });
 
-describe('useDeploySwarm — [BUG D1-3] no coordinate validation → false "MISSION SENT"', () => {
-  it('sends a polygon with non-finite coords (NaN→null on the wire) yet claims success', () => {
+describe('useDeploySwarm — [BUG D1-3 FIXED] non-finite coords are rejected, no false "MISSION SENT"', () => {
+  it('refuses to send a polygon with NaN/Infinity coords and flashes an error', () => {
     const { service, sendCommand } = makeService(true);
     const { result } = renderHook(() => useDeploySwarm({ service }));
 
@@ -226,23 +225,20 @@ describe('useDeploySwarm — [BUG D1-3] no coordinate validation → false "MISS
     ];
     act(() => result.current.onPerimeterDrawn(dirty));
 
-    // Length passes, so the button is armed and deploy proceeds.
-    expect(result.current.canDeploy).toBe(true);
+    // Length passes but a coord is non-finite, so the button is NOT armed.
+    expect(result.current.canDeploy).toBe(false);
     act(() => result.current.deploy());
 
-    expect(sendCommand).toHaveBeenCalledTimes(1);
-    const [, payload] = sendCommand.mock.calls[0];
-    // On the wire JSON.stringify coerces NaN/Infinity → null; the backend's
-    // _is_valid_polygon then rejects them and plans an EMPTY mission — but the
-    // operator was told the mission was sent successfully.
-    expect(JSON.stringify(payload)).toContain('null');
-    expect(result.current.hint).toBe('MISSION SENT — 3 VERTICES');
-    expect(result.current.hintState).toBe('armed');
+    // Nothing goes on the wire (would have been coerced to null and dropped by
+    // the backend's _is_valid_polygon); the operator gets an honest error.
+    expect(sendCommand).not.toHaveBeenCalled();
+    expect(result.current.hint).toBe('INVALID COORDS');
+    expect(result.current.hintState).toBe('error');
   });
 });
 
-describe('useDeploySwarm — [BUG D1-4] sticky success lets the same mission be re-fired', () => {
-  it('DEPLOY stays enabled after a send, so a second click re-sends the identical mission', () => {
+describe('useDeploySwarm — [BUG D1-4 FIXED] DEPLOY disarms after a send', () => {
+  it('a second deploy() with no geometry change does NOT re-send the mission', () => {
     const { service, sendCommand } = makeService(true);
     const { result } = renderHook(() => useDeploySwarm({ service }));
 
@@ -250,8 +246,23 @@ describe('useDeploySwarm — [BUG D1-4] sticky success lets the same mission be 
     act(() => result.current.deploy());
     act(() => result.current.deploy());
 
-    // No geometry change between clicks, yet two identical missions go out.
-    expect(sendCommand).toHaveBeenCalledTimes(2);
+    // Exactly one mission goes out; DEPLOY is disarmed until the geometry changes.
+    expect(sendCommand).toHaveBeenCalledTimes(1);
+    expect(result.current.canDeploy).toBe(false);
+  });
+
+  it('re-arms once the operator redraws (geometry change clears the latch)', () => {
+    const { service, sendCommand } = makeService(true);
+    const { result } = renderHook(() => useDeploySwarm({ service }));
+
+    act(() => result.current.onPerimeterDrawn(tri));
+    act(() => result.current.deploy());
+    expect(result.current.canDeploy).toBe(false);
+
+    // A fresh perimeter re-arms DEPLOY and a new mission can be sent.
+    act(() => result.current.onPerimeterDrawn([[2, 2], [3, 2], [3, 3]]));
     expect(result.current.canDeploy).toBe(true);
+    act(() => result.current.deploy());
+    expect(sendCommand).toHaveBeenCalledTimes(2);
   });
 });
