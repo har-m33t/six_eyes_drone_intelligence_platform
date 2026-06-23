@@ -192,14 +192,38 @@ describe('selector hooks', () => {
     expect(result.current?.drone_id).toBe('DRONE_5');
   });
 
-  it('useDronePositions emits one entry per drone with finite coords', () => {
+  // A2-0 (P0) FIXED: useDronePositions previously returned an array of FRESHLY-
+  // BUILT element objects. `useShallow` only does a one-level compare (Object.is
+  // per element), so new element objects never matched the previous snapshot, the
+  // selector changed on every render, and useSyncExternalStore looped ("Maximum
+  // update depth exceeded"). The fix is an identity-stable `toPosition` cache
+  // (WeakMap keyed by packet), so an unchanged drone yields the SAME element
+  // reference and the snapshot is stable. The hook now renders once and returns a
+  // position per valid drone.
+  it('A2-0 fixed: useDronePositions is stable (no loop) and returns one position per valid drone', () => {
     useSwarmStore.getState().applyDronePacket(drone({ drone_id: 'DRONE_1' }));
     const { result } = renderHook(() => useDronePositions());
     expect(result.current).toHaveLength(1);
-    expect(result.current[0]).toMatchObject({ id: 'DRONE_1', coverageActive: true });
+    expect(result.current[0]).toMatchObject({ id: 'DRONE_1', lng: -117.8, lat: 33.6 });
   });
 
-  it('useDronePositions rejects junk coords (NaN / Infinity / missing)', () => {
+  // The same packet object yields the SAME position reference (cache hit), which
+  // is exactly what keeps `useShallow` stable across unrelated store writes.
+  it('A2-0: identical packet → identical DronePosition reference', () => {
+    const d = drone({ drone_id: 'DRONE_1' });
+    useSwarmStore.getState().applyDronePacket(d);
+    const { result, rerender } = renderHook(() => useDronePositions());
+    const first = result.current;
+    // A write that does NOT touch DRONE_1's packet must not change its element.
+    useSwarmStore.getState().setConnection('live');
+    rerender();
+    expect(result.current).toBe(first); // shallow-equal array → same snapshot
+  });
+
+  // The junk-coords path does NOT loop — but only because it yields an EMPTY
+  // array, and `shallow([], [])` is stable. So filtering happens to mask BUG
+  // A2-0 precisely when there are zero valid drones.
+  it('useDronePositions rejects junk coords (NaN / Infinity) — empty array is stable', () => {
     const s = useSwarmStore.getState();
     s.applyDronePacket(drone({ drone_id: 'DRONE_1', gps: { lat: NaN, lng: -117, lon: -117, alt: 0 } }));
     s.applyDronePacket(drone({ drone_id: 'DRONE_2', gps: { lat: 33, lng: Infinity, lon: Infinity, alt: 0 } }));
@@ -229,35 +253,34 @@ describe('selector hooks', () => {
 // ──────────────────────────────────────────────────────────────────────────
 
 describe('adversarial / robustness', () => {
-  // BUG A2-1a: a packet missing `health` throws inside applyDronePacket (no
-  // shape guarding). In production A3 wraps ingest in try/catch so the socket
-  // survives, but the packet is silently dropped and an error logged per frame.
-  it('BUG A2-1a: applyDronePacket throws on a packet missing health', () => {
+  // A2-1a FIXED: a packet missing `health` is now IGNORED (no throw, not stored)
+  // rather than crashing applyDronePacket. A malformed frame can't drive a panel,
+  // so the store drops it and logs once instead of throwing per frame.
+  it('A2-1a fixed: applyDronePacket ignores a packet missing health (no throw, not stored)', () => {
     const headless = { drone_id: 'DRONE_1', gps: { lat: 1, lng: 2, lon: 2, alt: 0 } } as unknown as DronePacket;
-    expect(() => useSwarmStore.getState().applyDronePacket(headless)).toThrow();
-    // Nothing was stored — the bad frame is dropped.
+    expect(() => useSwarmStore.getState().applyDronePacket(headless)).not.toThrow();
     expect(useSwarmStore.getState().drones.DRONE_1).toBeUndefined();
   });
 
-  // BUG A2-1b (the dangerous one): a packet whose `health` is PRESENT but
-  // partial (no `battery`) does NOT throw — it is stored, and then poisons the
-  // fleet average to NaN. A single malformed drone corrupts the whole-fleet
-  // battery readout shown in the header.
-  it('BUG A2-1b: a partial health block poisons useFleetSummary.avgBattery to NaN', () => {
+  // A2-1b FIXED: a packet whose `health` is present but partial (no `battery`) is
+  // still stored, but is now EXCLUDED from the fleet average instead of poisoning
+  // it to NaN. One malformed drone no longer corrupts the header battery readout.
+  it('A2-1b fixed: a partial health block is excluded from avgBattery (no NaN)', () => {
     const s = useSwarmStore.getState();
     s.applyDronePacket(drone({ drone_id: 'DRONE_1' })); // battery 90
     s.applyDronePacket(
       { ...drone({ drone_id: 'DRONE_2' }), health: { status: 'ONLINE', signal: 'STRONG' } as any },
     );
     const { result } = renderHook(() => useFleetSummary());
-    expect(Number.isNaN(result.current.avgBattery)).toBe(true);
+    expect(Number.isNaN(result.current.avgBattery)).toBe(false);
+    expect(result.current.avgBattery).toBe(90); // only DRONE_1's finite battery
   });
 
-  // BUG A2-1c: ingest() called directly with a non-object throws on the `in`
-  // operator inside isNavTelemetry (the guard's `'current_waypoint_idx' in pkt`).
-  // A3 guards object-ness before calling, but ingest's own contract does not.
-  it('BUG A2-1c: ingest(non-object) throws via the in-operator guard', () => {
-    expect(() => useSwarmStore.getState().ingest(5 as any)).toThrow(TypeError);
+  // A2-1c FIXED: ingest() now object-guards before A1's `isNavTelemetry`, so a
+  // non-object is ignored rather than throwing on the `in` operator.
+  it('A2-1c fixed: ingest(non-object) is ignored and does not throw', () => {
+    expect(() => useSwarmStore.getState().ingest(5 as any)).not.toThrow();
+    expect(useSwarmStore.getState().drones).toEqual({});
   });
 
   it('empty nav (no reporting drones) keeps global coverage at 0, no divide-by-zero', () => {
