@@ -149,22 +149,46 @@ export interface NavTelemetry {
 /** Discriminated union of everything the socket may deliver. */
 export type InboundPacket = DronePacket | NavTelemetry;
 
+/** Narrow an unknown value to a plain object so `in`/property access is safe. */
+function isRecord(x: unknown): x is Record<string, unknown> {
+  return typeof x === 'object' && x !== null;
+}
+
 /**
- * Runtime discriminator mirroring the legacy `isNavTelemetry()`: a nav packet
+ * Runtime discriminator based on the legacy `isNavTelemetry()`: a nav packet
  * exposes `current_waypoint_idx`, or raw `x`/`y` numbers without a `gps` block.
- * Narrows an `InboundPacket` to `NavTelemetry`.
+ *
+ * Accepts `unknown` so it can validate raw `JSON.parse()` output directly at the
+ * WebSocket boundary (Task A3) without an unsafe cast.
+ *
+ * DIVERGENCE from legacy (intentional): legacy JS used `!pkt.gps` (truthiness),
+ * so a malformed `{x, y, gps: null}` packet was classified as nav. This guard
+ * uses `pkt.gps === undefined`, so such a packet is NOT nav — and, since
+ * `isDronePacket` requires `gps` to be an object, it is rejected as malformed
+ * rather than fed into nav handling. Real nav packets never carry a `gps` key,
+ * so this never fires in practice. Pinned by `telemetry.test.ts`.
  */
-export function isNavTelemetry(pkt: InboundPacket): pkt is NavTelemetry {
-  const p = pkt as Partial<NavTelemetry> & Partial<DronePacket>;
+export function isNavTelemetry(pkt: unknown): pkt is NavTelemetry {
+  if (!isRecord(pkt)) return false;
   return (
     'current_waypoint_idx' in pkt ||
-    (typeof p.x === 'number' && typeof p.y === 'number' && p.gps === undefined)
+    (typeof pkt.x === 'number' && typeof pkt.y === 'number' && pkt.gps === undefined)
   );
 }
 
-/** Narrows an `InboundPacket` to a full `DronePacket`. */
-export function isDronePacket(pkt: InboundPacket): pkt is DronePacket {
-  return !isNavTelemetry(pkt);
+/**
+ * Positively identify a full `DronePacket` (object carrying both `gps` and
+ * `health`) that is NOT nav telemetry. A positive structural check — rather than
+ * `!isNavTelemetry()` — so malformed/partial JSON is rejected instead of being
+ * silently treated as a valid drone packet.
+ */
+export function isDronePacket(pkt: unknown): pkt is DronePacket {
+  return (
+    isRecord(pkt) &&
+    isRecord(pkt.gps) &&
+    isRecord(pkt.health) &&
+    !isNavTelemetry(pkt)
+  );
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -201,7 +225,7 @@ export type CommandType = OutboundCommand['command'];
 /**
  * Helper that maps a command name to the payload it carries (everything in the
  * command envelope except the `command` discriminator). Backs the
- * `webSocketService.sendCommand(cmd, payload)` interface contract (§19).
+ * `webSocketService.sendCommand(cmd, payload)` interface contract (Module A).
  */
 export type CommandPayload<C extends CommandType> = Omit<
   Extract<OutboundCommand, { command: C }>,
