@@ -111,6 +111,14 @@ export class WebSocketService {
       return;
     }
 
+    // A non-OPEN/CONNECTING socket may still be lingering in CLOSING state with
+    // our handlers attached. Tear it down first so its late `onclose` can't null
+    // out the new socket below and trigger a spurious extra reconnect.
+    if (this.socket) {
+      this.teardownSocket(this.socket);
+      this.socket = null;
+    }
+
     this.manualClose = false;
     this.clearReconnectTimer();
     this.setStatus(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
@@ -136,19 +144,12 @@ export class WebSocketService {
     this.manualClose = true;
     this.clearReconnectTimer();
     this.reconnectAttempts = 0;
+    // A deliberate disconnect discards buffered commands — they belong to the
+    // session being torn down and must not silently replay on a later connect().
+    this.outboundQueue.length = 0;
 
     if (this.socket) {
-      // Detach handlers first so the impending close doesn't re-enter the
-      // reconnect logic through handleClose.
-      this.socket.onopen = null;
-      this.socket.onclose = null;
-      this.socket.onerror = null;
-      this.socket.onmessage = null;
-      try {
-        this.socket.close();
-      } catch {
-        /* already closing/closed — nothing to do */
-      }
+      this.teardownSocket(this.socket);
       this.socket = null;
     }
     this.setStatus('closed');
@@ -252,13 +253,15 @@ export class WebSocketService {
   /**
    * Exponential backoff: base · 2^attempts, capped at the ceiling, with ±20%
    * full jitter so a fleet of reconnecting clients does not stampede the server
-   * in lockstep.
+   * in lockstep. The result is clamped to `[0, maxReconnectDelayMs]` so positive
+   * jitter at the ceiling can never push the delay past it.
    */
   private nextReconnectDelay(): number {
     const exponential = this.baseReconnectDelayMs * 2 ** this.reconnectAttempts;
     const capped = Math.min(exponential, this.maxReconnectDelayMs);
     const jitter = capped * 0.2 * (Math.random() * 2 - 1);
-    return Math.max(0, Math.round(capped + jitter));
+    const delay = Math.round(capped + jitter);
+    return Math.min(this.maxReconnectDelayMs, Math.max(0, delay));
   }
 
   private clearReconnectTimer(): void {
@@ -271,10 +274,27 @@ export class WebSocketService {
   // ── Internals ────────────────────────────────────────────────────────────
 
   private flushOutboundQueue(): void {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     while (this.outboundQueue.length > 0) {
-      const frame = this.outboundQueue.shift()!;
+      // Re-check liveness each iteration: a send() can synchronously transition
+      // the socket out of OPEN, so peek-then-shift avoids dropping the frame we
+      // could not send (it stays queued for the next OPEN).
+      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+      const frame = this.outboundQueue[0];
       this.socket.send(frame);
+      this.outboundQueue.shift();
+    }
+  }
+
+  /** Detach our handlers from a socket and close it. Used by connect/disconnect. */
+  private teardownSocket(socket: WebSocket): void {
+    socket.onopen = null;
+    socket.onclose = null;
+    socket.onerror = null;
+    socket.onmessage = null;
+    try {
+      socket.close();
+    } catch {
+      /* already closing/closed — nothing to do */
     }
   }
 
