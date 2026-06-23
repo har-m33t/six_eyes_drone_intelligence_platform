@@ -31,7 +31,7 @@
  * ```
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type MutableRefObject } from 'react';
 import mapboxgl from 'mapbox-gl';
 import type { Map as MapboxMap, Marker } from 'mapbox-gl';
 import type { DroneId, DroneStatus } from '../types/telemetry';
@@ -183,7 +183,7 @@ export class DroneMarkerCache {
     return this.cache.size;
   }
 
-  /** Remove every marker (teardown / map style reload). */
+  /** Remove every marker (teardown / fresh mission). */
   clear(): void {
     for (const entry of this.cache.values()) entry.marker.remove();
     this.cache.clear();
@@ -211,11 +211,14 @@ export function useDroneMarkers(
   map: MapboxMap | null,
   positions: readonly DronePosition[],
   prune = false,
-): React.MutableRefObject<DroneMarkerCache | null> {
+): MutableRefObject<DroneMarkerCache | null> {
   const cacheRef = useRef<DroneMarkerCache | null>(null);
 
-  // (Re)build the cache whenever the underlying map identity changes (e.g. a
-  // Mapbox style reload), tearing the old markers down cleanly.
+  // (Re)build the cache whenever the underlying map *instance* changes (B1 mounts
+  // it asynchronously; a remounted TacticalMap yields a fresh map), tearing the
+  // old markers down cleanly. Note: a Mapbox style reload (`setStyle`) does NOT
+  // change the map identity and does NOT drop DOM Markers, so it correctly does
+  // not rebuild here (unlike B4's coverage source/layer, which must re-add).
   useEffect(() => {
     if (!map) return;
     const cache = new DroneMarkerCache(map);
@@ -228,9 +231,18 @@ export function useDroneMarkers(
 
   // Per-update sync. The cache mutates marker DOM directly, so this effect never
   // triggers a React re-render of the marker layer.
+  //
+  // `map` is in the deps deliberately: the map usually initialises asynchronously
+  // (B1 fires `onReady` on the Mapbox `load` event) AFTER the store already holds
+  // stable `positions`. Keyed only on `[positions, prune]`, this effect would not
+  // re-run when the cache is (re)created, leaving a freshly-built cache empty —
+  // no drones would appear until the next position change. Depending on `map`
+  // re-syncs against the new cache the moment it exists. (Effects run in
+  // declaration order, so the cache-build effect above has already populated
+  // `cacheRef` by the time this runs on a `map` change.)
   useEffect(() => {
     cacheRef.current?.sync(positions, { prune });
-  }, [positions, prune]);
+  }, [map, positions, prune]);
 
   return cacheRef;
 }
