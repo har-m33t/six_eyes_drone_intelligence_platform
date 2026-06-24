@@ -68,22 +68,31 @@ describe('isNavTelemetry / isDronePacket', () => {
     expect(isNavTelemetry(dronePacket())).toBe(false);
   });
 
-  // ── Adversarial: divergence from the legacy `!pkt.gps` truthiness check ──
-  // Legacy JS used `!pkt.gps`, so a packet carrying x/y AND `gps: null` (a
-  // malformed/explicit null) was still classified as nav. The TS guard uses
-  // `p.gps === undefined`, so `gps: null` is NOT undefined and the same packet
-  // is classified as a DRONE packet instead. Documented as a faithfulness nit
-  // (real nav packets always carry current_waypoint_idx, so this never fires in
-  // practice) — this test PINS the actual TS behaviour so the divergence is
-  // visible if anyone re-reads the "mirrors the legacy exactly" claim.
-  it('DIVERGENCE: x/y packet with gps:null is classified DRONE (legacy classified nav)', () => {
+  // ── Intentional divergence from the legacy `!pkt.gps` truthiness check ──
+  // Legacy JS used `!pkt.gps`, so a malformed packet carrying x/y AND `gps: null`
+  // was classified as nav and fed into nav handling. The TS guards use
+  // `pkt.gps === undefined` (nav) + a POSITIVE structural check (`isDronePacket`
+  // requires gps AND health to be objects), so the same packet is classified as
+  // NEITHER — it is rejected as malformed rather than misrouted. This is a
+  // deliberate robustness improvement over the legacy truthiness check; the test
+  // pins it so the behaviour is explicit.
+  it('robustness: an {x, y, gps:null} packet is rejected by BOTH guards (not misrouted)', () => {
     const weird = { drone_id: 'DRONE_3', x: 1, y: 2, gps: null } as unknown as InboundPacket;
-    // TS guard result:
-    expect(isNavTelemetry(weird)).toBe(false);
-    // Legacy `!pkt.gps` would have been true (null is falsy):
-    const legacy = 'current_waypoint_idx' in weird ||
+    expect(isNavTelemetry(weird)).toBe(false); // not nav (gps key present)
+    expect(isDronePacket(weird)).toBe(false); // not a valid drone packet (gps null, no health)
+    // Legacy `!pkt.gps` would have classified this as nav (null is falsy):
+    const legacyNav = 'current_waypoint_idx' in weird ||
       (typeof (weird as any).x === 'number' && typeof (weird as any).y === 'number' && !(weird as any).gps);
-    expect(legacy).toBe(true);
-    expect(isNavTelemetry(weird)).not.toBe(legacy);
+    expect(legacyNav).toBe(true);
+    expect(isNavTelemetry(weird)).not.toBe(legacyNav);
+  });
+
+  // The hardened guards never throw on junk input (A2-1c is defended at the guard
+  // level now, not just at the store's ingest()).
+  it('guards return false (never throw) for non-object input', () => {
+    for (const junk of [null, undefined, 5, 'x', true, []] as unknown[]) {
+      expect(isNavTelemetry(junk as any)).toBe(false);
+      expect(isDronePacket(junk as any)).toBe(false);
+    }
   });
 });
