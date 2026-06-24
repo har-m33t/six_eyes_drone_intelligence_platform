@@ -32,12 +32,22 @@ import type { LngLat } from '../types/telemetry';
 // Pure helpers (exported for unit tests — no Mapbox runtime needed)
 // ──────────────────────────────────────────────────────────────────────────
 
+/** Minimum distinct vertices for a usable search polygon (matches the
+ * START_MISSION schema / D1's deploy gate). */
+export const MIN_POLYGON_VERTICES = 3;
+
 /**
  * Pull the drawn polygon's outer ring as OPEN `[lng, lat]` vertices, matching
  * the legacy `getMissionPolygon()`. GeoJSON polygon rings are CLOSED (the last
  * vertex repeats the first); we drop that duplicate so consumers receive N
  * distinct vertices, exactly what the START_MISSION schema expects. Returns
  * `[]` when the feature collection has no usable polygon.
+ *
+ * [BUG B3-1 fix] Enforces the ≥3-vertex contract here rather than trusting every
+ * downstream caller: a degenerate ring (fast double-click / aborted draw, or an
+ * in-progress `draw.update` with one or two vertices) is rejected as `[]` so
+ * `getPolygon()`/`onPerimeterDrawn` can never hand D1 a sub-triangle it would
+ * forward to the backend.
  */
 export function extractPolygonRing(
   collection: GeoJSON.FeatureCollection,
@@ -53,6 +63,7 @@ export function extractPolygonRing(
     ring[0][0] === ring[ring.length - 1][0] &&
     ring[0][1] === ring[ring.length - 1][1];
   const open = closed ? ring.slice(0, -1) : ring;
+  if (open.length < MIN_POLYGON_VERTICES) return [];
   return open.map(([lng, lat]) => [lng, lat] as LngLat);
 }
 
