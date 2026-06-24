@@ -228,12 +228,12 @@ describe('useDroneMarkers', () => {
 
 // ── Break attempts / bug documentation ───────────────────────────────────────
 
-describe('useDroneMarkers — [BUG B2-1] first-paint race when the map readies after positions settle', () => {
-  it('leaves markers undrawn until the NEXT positions change if the map arrives late', () => {
+describe('useDroneMarkers — [BUG B2-1 FIXED] markers paint the moment the map readies', () => {
+  it('syncs a stable positions array immediately when the map arrives late', () => {
     // Real timeline: positions populate from the store first, then the map
-    // finishes loading. The cache is (re)built in a `[map]` effect; sync runs in
-    // a SEPARATE `[positions]` effect. When `map` flips null→ready without a
-    // positions change, the sync effect never re-runs → no dots.
+    // finishes loading. The sync effect now depends on `[map, positions, prune]`,
+    // so a null→ready map flip re-syncs against the freshly-built cache even when
+    // the positions reference never changes (frozen / paused stream).
     const positions = [pos({ id: 'DRONE_1' })]; // STABLE reference across renders
     const { result, rerender } = renderHook(
       ({ map }: { map: MapboxMap | null }) => useDroneMarkers(map, positions),
@@ -241,33 +241,26 @@ describe('useDroneMarkers — [BUG B2-1] first-paint race when the map readies a
     );
     expect(result.current.current).toBeNull();
 
-    // Map becomes ready, positions reference unchanged (frozen / paused stream).
+    // Map becomes ready, positions reference unchanged.
     rerender({ map: fakeMap });
 
-    // Cache exists, but it was never synced → zero markers despite a live drone.
+    // Cache built AND synced → the drone is drawn without waiting for a tick.
     expect(result.current.current).not.toBeNull();
-    expect(result.current.current?.size).toBe(0);
-
-    // Only a fresh positions array recovers it.
-    rerender({ map: fakeMap });
-    // (still the same `positions` ref → still empty, proving the dependency gap)
-    expect(result.current.current?.size).toBe(0);
+    expect(result.current.current?.size).toBe(1);
   });
 
-  it('draws immediately when a new positions array arrives after the map is ready', () => {
+  it('keeps markers in sync across subsequent positions updates', () => {
     let positions = [pos({ id: 'DRONE_1' })];
     const { result, rerender } = renderHook(
       ({ map }: { map: typeof fakeMap | null }) => useDroneMarkers(map, positions),
-      { initialProps: { map: null as typeof fakeMap | null } },
+      { initialProps: { map: fakeMap as typeof fakeMap | null } },
     );
-    rerender({ map: fakeMap });
-    expect(result.current.current?.size).toBe(0); // the race
+    expect(result.current.current?.size).toBe(1);
 
-    // New array reference (next store tick) → sync effect fires.
     act(() => {
-      positions = [pos({ id: 'DRONE_1' })];
+      positions = [pos({ id: 'DRONE_1' }), pos({ id: 'DRONE_2' })];
     });
     rerender({ map: fakeMap });
-    expect(result.current.current?.size).toBe(1);
+    expect(result.current.current?.size).toBe(2);
   });
 });
