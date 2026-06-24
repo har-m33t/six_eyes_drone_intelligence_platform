@@ -55,6 +55,16 @@ export const COVERAGE_INTERPOLATION_STEP_DEGREES = 0.00002;
 export const COVERAGE_MAX_INTERPOLATED_POINTS = 160;
 
 /**
+ * Minimum movement (in degrees) required before a drone paints another footprint.
+ * [BUG B4-1 fix] Without this, a hovering/creeping drone appends one coincident
+ * point per tick (`distance === 0` → `steps = max(1, …) = 1`), growing the source
+ * without bound at 20 Hz × 6 drones. Set to one footprint-spacing so sub-threshold
+ * motion is ignored; because the anchor is NOT advanced when a tick is skipped,
+ * slow drift still paints once it accumulates past one step — no gaps, no bloat.
+ */
+export const COVERAGE_MIN_MOVE_DEGREES = COVERAGE_INTERPOLATION_STEP_DEGREES;
+
+/**
  * Zoom → circle-radius (px) ramp. Scales the footprint with zoom so it covers a
  * roughly constant ground area, preventing holes from opening as the operator
  * zooms in. Copied verbatim from the legacy paint expression.
@@ -139,9 +149,32 @@ export class CoverageHeatmap {
     }
   }
 
-  /** Detach the deferred-load listener (call from the React cleanup path). */
+  /**
+   * Full teardown of this controller's map artefacts — call from the React
+   * cleanup path. Removes the deferred-load listener AND the coverage layer +
+   * source.
+   *
+   * [BUG B4-2 fix] Previously this removed only the `'load'` listener, so the
+   * source/layer leaked whenever the map outlived the controller (style reload,
+   * or a React remount on a still-mounted map). The layer is removed before the
+   * source (Mapbox forbids dropping a source still in use by a layer), and both
+   * are existence-guarded so teardown is safe before `attach()` or after a style
+   * reload already dropped them. The accumulated `geojson` buffer is retained, so
+   * a later `attach()` re-exposes the trail (matching the pre-attach buffering
+   * behaviour).
+   */
   detach(): void {
     this.map.off('load', this.onLoad);
+    // The map may already be torn down — on a React unmount the map-host's own
+    // `map.remove()` cleanup can run before this one, after which `getLayer` etc.
+    // throw because the style is gone. Guard the whole teardown so detach is a
+    // safe no-op in that case (there is nothing left to remove anyway).
+    try {
+      if (this.map.getLayer(COVERAGE_LAYER_ID)) this.map.removeLayer(COVERAGE_LAYER_ID);
+      if (this.map.getSource(COVERAGE_SOURCE_ID)) this.map.removeSource(COVERAGE_SOURCE_ID);
+    } catch {
+      /* map already removed — nothing to clean up */
+    }
   }
 
   private registerSourceAndLayer(): void {
@@ -166,25 +199,37 @@ export class CoverageHeatmap {
   }
 
   /**
-   * Fast append: drop a coverage footprint at `[lng, lat]` and repaint via
-   * `getSource().setData()`. When `droneId` is supplied, interpolate footprints
-   * from that drone's previous coordinate so the trail has no gaps between
-   * telemetry packets. `Number.isFinite` rejects undefined/NaN/Infinity, so a
-   * malformed packet can never inject a junk coordinate.
+   * Fast append: drop a coverage footprint at `[lng, lat]` for `droneId` and
+   * repaint via `getSource().setData()`. Interpolates footprints from that
+   * drone's previous coordinate so the trail has no gaps between telemetry
+   * packets. `Number.isFinite` rejects undefined/NaN/Infinity, so a malformed
+   * packet can never inject a junk coordinate.
    *
-   * Returns the number of footprint points appended (0 if the coord was junk).
+   * `droneId` is REQUIRED [BUG B4-3 fix]: it keys the per-drone interpolation
+   * anchor. The old `droneId = null` default funnelled every caller into a shared
+   * `'__global__'` chain, so two unrelated drones appended without ids would be
+   * bridged by one long bogus line. Making it required removes that footgun at
+   * compile time — the only caller (per-drone telemetry) always has an id.
+   *
+   * Returns the number of footprint points appended (0 if the coord was junk or
+   * the drone has not moved at least `COVERAGE_MIN_MOVE_DEGREES` — see B4-1).
    */
-  append(lng: number, lat: number, droneId: string | null = null): number {
+  append(lng: number, lat: number, droneId: string): number {
     if (!Number.isFinite(lng) || !Number.isFinite(lat)) return 0;
 
-    const key = droneId ?? '__global__';
-    const prev = this.lastByDrone[key];
+    const prev = this.lastByDrone[droneId];
     let appended = 0;
 
-    if (prev && Number.isFinite(prev.lng) && Number.isFinite(prev.lat)) {
+    if (prev) {
       const distLng = lng - prev.lng;
       const distLat = lat - prev.lat;
       const distance = Math.hypot(distLng, distLat);
+
+      // [BUG B4-1 fix] Ignore sub-threshold motion. The anchor is deliberately
+      // left in place (no update below) so a slowly-drifting drone still paints
+      // once its accumulated displacement crosses one footprint-spacing.
+      if (distance < COVERAGE_MIN_MOVE_DEGREES) return 0;
+
       const steps = Math.min(
         COVERAGE_MAX_INTERPOLATED_POINTS,
         Math.max(1, Math.ceil(distance / COVERAGE_INTERPOLATION_STEP_DEGREES)),
@@ -198,7 +243,7 @@ export class CoverageHeatmap {
       this.appendPoint(lng, lat);
       appended++;
     }
-    this.lastByDrone[key] = { lng, lat };
+    this.lastByDrone[droneId] = { lng, lat };
 
     this.flush();
     return appended;
