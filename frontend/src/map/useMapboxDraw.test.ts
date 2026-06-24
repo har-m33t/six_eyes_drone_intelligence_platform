@@ -60,6 +60,7 @@ import {
   useMapboxDraw,
   extractPolygonRing,
   POLYGON_ONLY_DRAW_OPTIONS,
+  MIN_POLYGON_VERTICES,
 } from './useMapboxDraw';
 
 // ── Fake mapboxgl.Map ────────────────────────────────────────────────────────
@@ -141,12 +142,28 @@ describe('extractPolygonRing', () => {
   });
 });
 
-describe('extractPolygonRing — [BUG B3-1] no ≥3-vertex validity guard', () => {
-  it('returns a 1-vertex "polygon" for a degenerate 2-point closed ring', () => {
-    // A degenerate ring (e.g. a fast double-click / aborted draw) yields ONE
-    // vertex. The hook contract claims it only emits rings of ≥3 vertices, but
-    // nothing enforces that — getPolygon() can hand D1 an invalid sub-triangle.
-    expect(extractPolygonRing(polyFC([[0, 0], [0, 0]]))).toEqual([[0, 0]]);
+describe('extractPolygonRing — [BUG B3-1 FIXED] ≥3-vertex validity guard', () => {
+  it('rejects a degenerate 2-point closed ring as []', () => {
+    // A degenerate ring (fast double-click / aborted draw) collapses to one
+    // vertex; the guard now rejects anything below MIN_POLYGON_VERTICES so
+    // getPolygon() can never hand D1 an invalid sub-triangle.
+    expect(extractPolygonRing(polyFC([[0, 0], [0, 0]]))).toEqual([]);
+  });
+
+  it('rejects an in-progress 2-vertex open ring (mid-draw update) as []', () => {
+    expect(extractPolygonRing(polyFC([[0, 0], [1, 1]]))).toEqual([]);
+  });
+
+  it('still accepts a valid 3-vertex polygon', () => {
+    expect(extractPolygonRing(polyFC([[0, 0], [1, 0], [1, 1], [0, 0]]))).toEqual([
+      [0, 0],
+      [1, 0],
+      [1, 1],
+    ]);
+  });
+
+  it('MIN_POLYGON_VERTICES is 3 (matches the START_MISSION gate)', () => {
+    expect(MIN_POLYGON_VERTICES).toBe(3);
   });
 });
 
@@ -259,8 +276,8 @@ describe('useMapboxDraw — mount / handle', () => {
 
 // ── Break attempts / bug documentation ───────────────────────────────────────
 
-describe('useMapboxDraw — [BUG B3-2] startDrawing() does not notify the perimeter callback', () => {
-  it('wipes the existing polygon but leaves the consumer holding a STALE non-empty perimeter', () => {
+describe('useMapboxDraw — [BUG B3-2 FIXED] startDrawing() notifies the perimeter callback', () => {
+  it('wipes the existing polygon AND emits [] so the consumer stays in sync', () => {
     const m = makeMap();
     const onPerimeterDrawn = vi.fn();
     const { result } = renderHook(() => useMapboxDraw({ map: asMap(m), onPerimeterDrawn }));
@@ -274,10 +291,11 @@ describe('useMapboxDraw — [BUG B3-2] startDrawing() does not notify the perime
     // Operator hits "draw again": startDrawing() deleteAll's the geometry…
     act(() => result.current.startDrawing());
 
-    // …but unlike clear(), it does NOT emit []. The geometry is now empty while
-    // the consumer still believes a 3-vertex perimeter is armed → desync.
+    // …and now, like clear(), it emits [] so the consumer drops the stale
+    // perimeter before the replacement polygon is drawn.
     expect(drawInstances[0].deleteAll).toHaveBeenCalled();
-    expect(onPerimeterDrawn).not.toHaveBeenCalled();
+    expect(onPerimeterDrawn).toHaveBeenCalledWith([]);
+    expect(drawInstances[0].changeMode).toHaveBeenCalledWith('draw_polygon');
     expect(result.current.getPolygon()).toEqual([]); // live geometry is empty
   });
 });
