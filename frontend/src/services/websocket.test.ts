@@ -232,7 +232,8 @@ describe('reconnection backoff', () => {
     // force several drops; delay must never exceed the 5000 cap
     for (let i = 0; i < 6; i++) {
       last().drvClose();
-      const lastDelay = setTimeoutSpy.mock.calls.at(-1)![1] as number;
+      const calls = setTimeoutSpy.mock.calls;
+      const lastDelay = calls[calls.length - 1][1] as number;
       expect(lastDelay).toBeLessThanOrEqual(5000);
       vi.advanceTimersByTime(lastDelay);
     }
