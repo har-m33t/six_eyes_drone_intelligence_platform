@@ -2,10 +2,18 @@
  * SIX-EYES Tactical Map (Module B · Task B1 — Mapbox Core Layout)
  * ---------------------------------------------------------------
  * The hardware-accelerated geospatial plane of the dashboard. This component
- * owns *only* the Mapbox GL JS base map: container, lifecycle, dark tactical
- * styling, and navigation control. It is deliberately isolated from layout
- * panels (Module C) and the data store (Module A) — it speaks purely through
- * the Module B interface contract so the four B-tasks can land independently.
+ * owns the Mapbox GL JS base map — container, lifecycle, dark tactical styling,
+ * navigation control — and is the single host that COMPOSES the rest of Module
+ * B onto that map:
+ *   - B2 (High-Frequency Marker Cache) ← `positions`        (`useDroneMarkers`)
+ *   - B3 (Mapbox Draw Integration)     ↔ `onPerimeterDrawn` (`useMapboxDraw`)
+ *   - B4 (Heatmap Append Pipeline)     ← `positions`        (`CoverageHeatmap`)
+ *
+ * It stays decoupled from the layout panels (Module C) and the store runtime
+ * (Module A): everything flows through the Module B interface contract —
+ * `positions` in, `onPerimeterDrawn` out — so a parent (Module D / integration)
+ * supplies `useDronePositions()` and the deploy callback without this component
+ * reaching across a boundary.
  *
  * Reverse-engineered from the legacy vanilla dashboard
  * (`six_eyes_dashboard.html`, "Task 1: Map Initialization & Styling"):
@@ -14,22 +22,21 @@
  *   - center  : RUNTIME_CONFIG.INITIAL_MAP_CENTER, else [0, 0]
  *   - controls: NavigationControl (top-right), attribution disabled
  *   - token   : window.SIX_EYES_CONFIG.MAPBOX_ACCESS_TOKEN (warn if absent)
- *
- * SCOPE — this file is Task B1 ONLY. The remaining B-tasks plug into the
- * `mapRef` / `onReady` seam exposed here without touching init:
- *   - B2 (High-Frequency Marker Cache) consumes `positions`.
- *   - B3 (Mapbox Draw Integration)     wires `onPerimeterDrawn`.
- *   - B4 (Heatmap Append Pipeline)     adds the coverage GeoJSON source/layer.
- * Those props are declared on the contract below but intentionally not yet
- * read here — see the `frontend-migration.md` changelog for the handoff notes.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
 import './TacticalMap.css';
 
-import type { DroneId, DroneStatus, LngLat, SignalState } from '../types/telemetry';
+import type { LngLat } from '../types/telemetry';
+// The store's derived view-model `{ id, lng, lat, status, hasDetection,
+// coverageActive }` is the array Module B consumes from `useDronePositions()`
+// (re-exported by the B2 marker module). Type-only import — no store runtime.
+import { useDroneMarkers, type DronePosition } from '../map/droneMarkers';
+import { useMapboxDraw, type MapboxDrawHandle } from '../map/useMapboxDraw';
+import { CoverageHeatmap } from '../map/coverageHeatmap';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Runtime configuration bridge
@@ -40,6 +47,10 @@ import type { DroneId, DroneStatus, LngLat, SignalState } from '../types/telemet
  * legacy `window.SIX_EYES_CONFIG`. Kept as a fallback so the migrated frontend
  * can be served by the existing `src/dashboard_server.py` without a rebuild.
  * Under Vite the canonical source is `import.meta.env.VITE_MAPBOX_ACCESS_TOKEN`.
+ *
+ * This component is the SOLE owner of the `Window.SIX_EYES_CONFIG` augmentation
+ * (A3's `services/websocket.ts` reads it via a local cast to avoid the earlier
+ * duplicate-declaration clash — see module_b_review.md §3).
  */
 declare global {
   interface Window {
@@ -55,6 +66,10 @@ declare global {
 const DEFAULT_STYLE = 'mapbox://styles/mapbox/dark-v11';
 const DEFAULT_ZOOM = 14;
 const DEFAULT_CENTER: LngLat = [0, 0];
+
+/** Stable empty positions array so the marker/coverage effects don't re-run
+ * every render when the parent omits `positions`. */
+const NO_POSITIONS: readonly DronePosition[] = [];
 
 /** True only for a finite `[lng, lat]` pair (port of legacy `validLngLatPair`). */
 function isLngLatPair(value: unknown): value is LngLat {
@@ -74,8 +89,7 @@ function isLngLatPair(value: unknown): value is LngLat {
  */
 function resolveAccessToken(explicit?: string): string {
   if (explicit) return explicit;
-  const viteToken = (import.meta as ImportMeta & { env?: Record<string, string | undefined> })
-    .env?.VITE_MAPBOX_ACCESS_TOKEN;
+  const viteToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN;
   if (viteToken) return viteToken;
   return window.SIX_EYES_CONFIG?.MAPBOX_ACCESS_TOKEN ?? '';
 }
@@ -84,26 +98,24 @@ function resolveAccessToken(explicit?: string): string {
 // Interface contract (Module B)
 // ──────────────────────────────────────────────────────────────────────────
 
-/**
- * A single live drone position for the marker cache (consumed by Task B2).
- * Declared now so the contract is stable for parallel work.
- */
-export interface DronePosition {
-  drone_id: DroneId;
-  /** `[lng, lat]`, GeoJSON order. */
-  position: LngLat;
-  status?: DroneStatus;
-  signal?: SignalState;
-}
-
 export interface TacticalMapProps {
-  /** Live drone positions from the Module A store (Task B2). */
-  positions?: DronePosition[];
   /**
-   * Fired when the operator finishes drawing a search perimeter with Mapbox
-   * Draw (Task B3 → consumed by Module D's DEPLOY SWARM, Task D1).
+   * Live drone positions from the Module A store (`useDronePositions()`). Drives
+   * the B2 marker cache and the B4 coverage footprint imperatively — never
+   * re-rendering the map for a telemetry tick.
+   */
+  positions?: readonly DronePosition[];
+  /**
+   * Fired with the open `[lng, lat]` ring whenever the operator finishes/edits a
+   * search perimeter (Task B3 → consumed by Module D's DEPLOY SWARM, Task D1),
+   * and with `[]` when the polygon is cleared.
    */
   onPerimeterDrawn?: (coordinates: LngLat[]) => void;
+  /**
+   * Hands D1 the imperative draw handle (`startDrawing` / `clear` / `getPolygon`)
+   * so the DEPLOY SWARM controls can drive drawing without owning the map.
+   */
+  onDrawReady?: (handle: MapboxDrawHandle) => void;
   /** Override the initial camera center (`[lng, lat]`). */
   initialCenter?: LngLat;
   /** Override the initial zoom level. */
@@ -111,10 +123,46 @@ export interface TacticalMapProps {
   /** Override the Mapbox access token (else env / global config). */
   accessToken?: string;
   /**
-   * Escape hatch handing the initialised `mapboxgl.Map` to later B-tasks so
-   * they can attach markers / draw / sources without re-initialising the map.
+   * Notified once with the initialised `mapboxgl.Map` on its `load` event, for a
+   * parent that needs raw map access. Read live (a swapped handler is honoured).
    */
   onReady?: (map: mapboxgl.Map) => void;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Coverage footprint glue (B4) — drives the CoverageHeatmap from positions.
+// Local to B1 (the map host) rather than added to B4's framework-agnostic file.
+// ──────────────────────────────────────────────────────────────────────────
+
+function useCoverageHeatmap(
+  map: mapboxgl.Map | null,
+  positions: readonly DronePosition[],
+): void {
+  const heatmapRef = useRef<CoverageHeatmap | null>(null);
+
+  useEffect(() => {
+    if (!map) return;
+    const heatmap = new CoverageHeatmap(map);
+    heatmap.attach();
+    heatmapRef.current = heatmap;
+    return () => {
+      heatmap.detach();
+      heatmapRef.current = null;
+    };
+  }, [map]);
+
+  // Append a footprint for every actively-covering drone; break the trail
+  // segment for any drone in transit (`coverageActive === false`) so we don't
+  // draw a line across the gap. Depends on `map` too, so the first batch paints
+  // as soon as the map readies even if `positions` has already settled.
+  useEffect(() => {
+    const heatmap = heatmapRef.current;
+    if (!heatmap) return;
+    for (const p of positions) {
+      if (p.coverageActive) heatmap.append(p.lng, p.lat, p.id);
+      else heatmap.breakSegment(p.id);
+    }
+  }, [map, positions]);
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -122,22 +170,31 @@ export interface TacticalMapProps {
 // ──────────────────────────────────────────────────────────────────────────
 
 /**
- * Initialises the Mapbox base map into a `useRef` container exactly once and
- * tears it down on unmount. Idempotent under React 18 StrictMode's double-mount
- * via the `mapRef` guard + `map.remove()` cleanup.
+ * Initialises the Mapbox base map into a `useRef` container and composes the
+ * rest of Module B onto it. The map lives in state (not just a ref) so the
+ * marker / draw / coverage hooks activate the moment it is ready; teardown via
+ * `map.remove()` keeps it StrictMode-safe.
  */
 export function TacticalMap({
+  positions,
+  onPerimeterDrawn,
+  onDrawReady,
   initialCenter,
   initialZoom = DEFAULT_ZOOM,
   accessToken,
   onReady,
 }: TacticalMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<mapboxgl.Map | null>(null);
+  const [map, setMap] = useState<mapboxgl.Map | null>(null);
+
+  // BUG B1-3 fix: read `onReady` through a ref so a parent that swaps the
+  // handler after first render is still honoured, even though the init effect
+  // (correctly) runs once and must not recreate the map.
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
 
   useEffect(() => {
-    // Guard against StrictMode double-invocation and missing container.
-    if (mapRef.current || !containerRef.current) return;
+    if (!containerRef.current) return;
 
     const token = resolveAccessToken(accessToken);
     if (!token) {
@@ -154,26 +211,40 @@ export function TacticalMap({
         ? (window.SIX_EYES_CONFIG!.INITIAL_MAP_CENTER as LngLat)
         : DEFAULT_CENTER;
 
-    const map = new mapboxgl.Map({
+    const m = new mapboxgl.Map({
       container: containerRef.current,
       style: DEFAULT_STYLE,
       center,
       zoom: initialZoom,
       attributionControl: false,
     });
-    map.addControl(new mapboxgl.NavigationControl({ visualizePitch: false }), 'top-right');
+    m.addControl(new mapboxgl.NavigationControl({ visualizePitch: false }), 'top-right');
+    m.on('load', () => onReadyRef.current?.(m));
 
-    mapRef.current = map;
-    map.on('load', () => onReady?.(map));
+    setMap(m);
 
     return () => {
-      map.remove();
-      mapRef.current = null;
+      m.remove();
+      setMap(null);
     };
     // Init args are read once; re-running would destroy/recreate the map. The
-    // dynamic data path (positions) is handled imperatively in Task B2.
+    // dynamic data path (positions / onReady) is handled via state + refs above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const livePositions = positions ?? NO_POSITIONS;
+
+  // B2 — live drone markers (imperative ref-cache; zero re-renders at 20 Hz).
+  useDroneMarkers(map, livePositions);
+
+  // B3 — polygon draw; surface the imperative handle to D1's DEPLOY controls.
+  const draw = useMapboxDraw({ map, onPerimeterDrawn });
+  useEffect(() => {
+    onDrawReady?.(draw);
+  }, [draw, onDrawReady]);
+
+  // B4 — accumulating purple search footprint.
+  useCoverageHeatmap(map, livePositions);
 
   return <div ref={containerRef} className="tactical-map" data-testid="tactical-map" />;
 }
