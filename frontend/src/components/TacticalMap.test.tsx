@@ -2,20 +2,24 @@
  * Code-review test suite — Module B · Task B1 (`TacticalMap`).
  *
  * Covers map initialisation (style/zoom/center/controls), token + center
- * resolution chains, and the onReady/teardown lifecycle, AND "try to break it"
- * cases that document the bugs found in the review (see
- * `.claude/module_b_review.md`). Bug-documenting cases are tagged `[BUG B1-n]`
- * and assert the CURRENT behaviour so the suite stays green and the regression
- * is pinned; flip the assertion when the bug is fixed.
+ * resolution chains, the onReady/teardown lifecycle, AND the Module-B wiring
+ * that B1 now composes onto the map (B2 markers, B3 draw, B4 coverage).
  *
- * `mapbox-gl` is mocked with a fake `Map`/`NavigationControl` (its real runtime
- * needs WebGL jsdom cannot provide).
+ * The `[BUG B1-n]` cases from the review (`.claude/module_b_review.md`) are now
+ * FIXED and assert the corrected behaviour:
+ *   - B1-1  `positions` is typed against the store's `DronePosition` shape.
+ *   - B1-2  `positions` / `onPerimeterDrawn` are consumed (markers + draw).
+ *   - B1-3  `onReady` is read live via a ref.
+ *
+ * `mapbox-gl` and `@mapbox/mapbox-gl-draw` are mocked with fakes (their real
+ * runtime needs WebGL jsdom cannot provide).
  *
  *   cd frontend && npm test
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from '@testing-library/react';
+import type { DronePosition } from '../map/droneMarkers';
 
 // ── Mock mapbox-gl ───────────────────────────────────────────────────────────
 
@@ -23,27 +27,69 @@ interface FakeMap {
   options: Record<string, unknown>;
   controls: Array<{ control: unknown; position?: string }>;
   on: ReturnType<typeof vi.fn>;
+  off: ReturnType<typeof vi.fn>;
   addControl: ReturnType<typeof vi.fn>;
+  removeControl: ReturnType<typeof vi.fn>;
+  hasControl: ReturnType<typeof vi.fn>;
   remove: ReturnType<typeof vi.fn>;
+  isStyleLoaded: ReturnType<typeof vi.fn>;
+  getSource: ReturnType<typeof vi.fn>;
+  addSource: ReturnType<typeof vi.fn>;
+  addLayer: ReturnType<typeof vi.fn>;
+  getLayer: ReturnType<typeof vi.fn>;
+  removeSource: ReturnType<typeof vi.fn>;
+  removeLayer: ReturnType<typeof vi.fn>;
+  fire: (ev: string) => void;
   fireLoad: () => void;
 }
 
-const { maps, navControls, mapboxglMock } = vi.hoisted(() => {
+const { maps, navControls, markers, mapboxglMock, drawMock } = vi.hoisted(() => {
   const createdMaps: FakeMap[] = [];
   const createdNav: Array<Record<string, unknown>> = [];
+  const createdMarkers: Array<Record<string, unknown>> = [];
+
+  // Mutable geometry the fake MapboxDraw hands back from getAll(); a closed
+  // triangle by default → extractPolygonRing yields 3 open vertices.
+  const draw = {
+    geometry: {
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          geometry: { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] },
+          properties: {},
+        },
+      ],
+    } as unknown,
+  };
 
   class FakeMapImpl {
     options: Record<string, unknown>;
     controls: Array<{ control: unknown; position?: string }> = [];
-    private loadCbs: Array<() => void> = [];
+    private handlers: Record<string, Array<() => void>> = {};
     on = vi.fn((ev: string, cb: () => void) => {
-      if (ev === 'load') this.loadCbs.push(cb);
+      (this.handlers[ev] ??= []).push(cb);
+    });
+    off = vi.fn((ev: string, cb: () => void) => {
+      this.handlers[ev] = (this.handlers[ev] ?? []).filter((h) => h !== cb);
     });
     addControl = vi.fn((control: unknown, position?: string) => {
       this.controls.push({ control, position });
     });
+    removeControl = vi.fn((control: unknown) => {
+      this.controls = this.controls.filter((c) => c.control !== control);
+    });
+    hasControl = vi.fn(() => true);
     remove = vi.fn();
-    fireLoad = () => this.loadCbs.slice().forEach((cb) => cb());
+    isStyleLoaded = vi.fn(() => false);
+    getSource = vi.fn(() => undefined);
+    addSource = vi.fn();
+    addLayer = vi.fn();
+    getLayer = vi.fn(() => undefined);
+    removeSource = vi.fn();
+    removeLayer = vi.fn();
+    fire = (ev: string) => (this.handlers[ev] ?? []).slice().forEach((cb) => cb());
+    fireLoad = () => this.fire('load');
     constructor(options: Record<string, unknown>) {
       this.options = options;
       createdMaps.push(this as unknown as FakeMap);
@@ -54,17 +100,52 @@ const { maps, navControls, mapboxglMock } = vi.hoisted(() => {
       createdNav.push(opts);
     }
   }
-  const mock = {
+  class FakeMarker {
+    setLngLat = vi.fn(() => this);
+    addTo = vi.fn(() => this);
+    remove = vi.fn();
+    constructor(opts: Record<string, unknown>) {
+      createdMarkers.push(opts);
+    }
+  }
+  class FakeDraw {
+    getAll = vi.fn(() => draw.geometry);
+    deleteAll = vi.fn();
+    changeMode = vi.fn();
+  }
+
+  const mapboxgl = {
     accessToken: '',
     Map: FakeMapImpl,
     NavigationControl: FakeNavControl,
+    Marker: FakeMarker,
   };
-  return { maps: createdMaps, navControls: createdNav, mapboxglMock: mock };
+  return {
+    maps: createdMaps,
+    navControls: createdNav,
+    markers: createdMarkers,
+    mapboxglMock: mapboxgl,
+    drawMock: FakeDraw,
+  };
 });
 
 vi.mock('mapbox-gl', () => ({ default: mapboxglMock }));
+vi.mock('@mapbox/mapbox-gl-draw', () => ({ default: drawMock }));
 
 import { TacticalMap } from './TacticalMap';
+
+/** A store-shaped position (`DronePosition` from the A2 store / B2 marker module). */
+function pos(overrides: Partial<DronePosition> = {}): DronePosition {
+  return {
+    id: 'DRONE_1',
+    lng: 1,
+    lat: 2,
+    status: 'ONLINE',
+    hasDetection: false,
+    coverageActive: false,
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   mapboxglMock.accessToken = '';
@@ -74,6 +155,7 @@ beforeEach(() => {
 afterEach(() => {
   maps.length = 0;
   navControls.length = 0;
+  markers.length = 0;
   vi.restoreAllMocks();
   vi.clearAllMocks();
 });
@@ -170,41 +252,73 @@ describe('TacticalMap — lifecycle', () => {
   });
 });
 
-// ── Break attempts / bug documentation ───────────────────────────────────────
+// ── Module-B wiring (the B1-2 fix) ───────────────────────────────────────────
 
-describe('TacticalMap — [BUG B1-2] declared B-task props are never consumed', () => {
-  it('ignores `positions` and `onPerimeterDrawn` — the module is wholly unwired', () => {
+describe('TacticalMap — [BUG B1-2 FIXED] composes the Module-B layer', () => {
+  it('consumes positions (markers) and mounts the polygon draw control', () => {
     const onPerimeterDrawn = vi.fn();
+    const onDrawReady = vi.fn();
     render(
       <TacticalMap
         accessToken="t"
-        // store-shaped positions, as B2's useDroneMarkers would consume
-        positions={[
-          { drone_id: 'DRONE_1', position: [1, 2] },
-        ]}
+        positions={[pos({ id: 'DRONE_1', lng: 10, lat: 20 })]}
         onPerimeterDrawn={onPerimeterDrawn}
+        onDrawReady={onDrawReady}
       />,
     );
+
+    // The polygon draw control is mounted alongside the nav control.
+    expect(maps[0].controls).toHaveLength(2);
+    expect(maps[0].controls[0].position).toBe('top-right'); // nav
+    expect(maps[0].controls[1].position).toBe('top-left'); // draw (legacy default)
+
+    // A marker was created for the supplied position (B2 cache, not React state).
+    expect(markers).toHaveLength(1);
+
+    // D1 receives the imperative draw handle.
+    expect(onDrawReady).toHaveBeenCalledTimes(1);
+    expect(onDrawReady.mock.calls[0][0]).toMatchObject({
+      startDrawing: expect.any(Function),
+      clear: expect.any(Function),
+      getPolygon: expect.any(Function),
+    });
+
+    // Completing a polygon flows the open ring out through onPerimeterDrawn.
+    maps[0].fire('draw.create');
+    expect(onPerimeterDrawn).toHaveBeenCalledWith([[0, 0], [1, 0], [1, 1]]);
+  });
+
+  it('paints a coverage footprint for an actively-covering drone', () => {
+    render(
+      <TacticalMap
+        accessToken="t"
+        positions={[pos({ id: 'DRONE_2', lng: 5, lat: 5, coverageActive: true })]}
+      />,
+    );
+    // Coverage source/layer register on load, then the buffered append flushes.
     maps[0].fireLoad();
-    // B1 never composes useDroneMarkers / useMapboxDraw / CoverageHeatmap, so
-    // no markers, no draw control (only the NavigationControl), no callback.
-    expect(maps[0].controls).toHaveLength(1); // just the nav control
-    expect(onPerimeterDrawn).not.toHaveBeenCalled();
+    expect(maps[0].addSource).toHaveBeenCalledWith('coverage-source', expect.anything());
+    expect(maps[0].addLayer).toHaveBeenCalled();
   });
 });
 
-describe('TacticalMap — [BUG B1-3] init args captured once; later prop changes are ignored', () => {
-  it('does not re-create the map or honour a changed onReady when props change', () => {
+// ── onReady liveness (the B1-3 fix) ──────────────────────────────────────────
+
+describe('TacticalMap — [BUG B1-3 FIXED] onReady is read live', () => {
+  it('invokes the latest onReady (not a stale closure) and never recreates the map', () => {
     const first = vi.fn();
     const second = vi.fn();
     const { rerender } = render(<TacticalMap accessToken="t" onReady={first} />);
     rerender(<TacticalMap accessToken="t" onReady={second} initialCenter={[99, 99]} />);
 
-    // Empty-dep effect → still one map, original center, ORIGINAL onReady.
+    // Empty-dep init effect → still one map; init args (center) captured once.
     expect(maps).toHaveLength(1);
-    expect(maps[0].options.center).toEqual([0, 0]); // [99,99] ignored
+    expect(maps[0].options.center).toEqual([0, 0]); // [99,99] correctly ignored
+
+    // load now invokes the CURRENT handler, not the one from first render.
     maps[0].fireLoad();
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).not.toHaveBeenCalled(); // stale closure
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledWith(maps[0]);
   });
 });
