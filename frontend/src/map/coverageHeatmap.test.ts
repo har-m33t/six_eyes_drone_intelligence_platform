@@ -32,6 +32,9 @@ interface FakeMap {
   getSource: (id: string) => { setData: (d: unknown) => void } | undefined;
   addSource: (id: string, src: unknown) => void;
   addLayer: (layer: unknown) => void;
+  getLayer: (id: string) => { id: string } | undefined;
+  removeLayer: (id: string) => void;
+  removeSource: (id: string) => void;
   // test affordances
   fire: (ev: string) => void;
   listenerCount: (ev: string) => number;
@@ -65,6 +68,14 @@ function makeMap(styleLoaded = true): FakeMap {
     },
     addLayer: (layer) => {
       if ((layer as { id: string }).id === COVERAGE_LAYER_ID) layerAdded = true;
+    },
+    getLayer: (id) =>
+      layerAdded && id === COVERAGE_LAYER_ID ? { id } : undefined,
+    removeLayer: (id) => {
+      if (id === COVERAGE_LAYER_ID) layerAdded = false;
+    },
+    removeSource: (id) => {
+      if (id === COVERAGE_SOURCE_ID) sourceAdded = false;
     },
     fire: (ev) => (listeners[ev] ?? []).slice().forEach((f) => f()),
     listenerCount: (ev) => (listeners[ev] ?? []).length,
@@ -158,10 +169,10 @@ describe('CoverageHeatmap — append & interpolation', () => {
   it('rejects non-finite coordinates (NaN / Infinity / undefined)', () => {
     const h = new CoverageHeatmap(asMap(makeMap()));
     h.attach();
-    expect(h.append(Number.NaN, 1)).toBe(0);
-    expect(h.append(1, Number.POSITIVE_INFINITY)).toBe(0);
+    expect(h.append(Number.NaN, 1, 'D')).toBe(0);
+    expect(h.append(1, Number.POSITIVE_INFINITY, 'D')).toBe(0);
     // @ts-expect-error — exercising a malformed packet at runtime
-    expect(h.append(undefined, 1)).toBe(0);
+    expect(h.append(undefined, 1, 'D')).toBe(0);
     expect(h.pointCount).toBe(0);
   });
 
@@ -198,53 +209,83 @@ describe('CoverageHeatmap — breakSegment & clear', () => {
   });
 });
 
-// ── Break attempts / bug documentation ───────────────────────────────────────
+// ── Regression tests for the fixed review bugs ───────────────────────────────
 
-describe('CoverageHeatmap — [BUG B4-1] unbounded growth for a stationary drone', () => {
-  it('appends one duplicate point per tick even when the drone has not moved', () => {
+describe('CoverageHeatmap — [BUG B4-1 FIXED] bounded growth for a stationary/slow drone', () => {
+  it('a hovering drone (no movement) paints exactly one footprint, not one per tick', () => {
     const h = new CoverageHeatmap(asMap(makeMap()));
     h.attach();
-    // A hovering drone reports the SAME coordinate every tick. distance === 0 →
-    // steps = max(1, ceil(0)) = 1, so a coincident point is appended each call.
+    // A hovering drone reports the SAME coordinate every tick. distance === 0 is
+    // below COVERAGE_MIN_MOVE_DEGREES, so every tick after the first is skipped.
     for (let i = 0; i < 200; i++) h.append(5, 5, 'D');
-    // 200 identical, coincident footprints accumulate with no dedup / total cap.
-    // At 20 Hz × 6 drones a long mission grows the FeatureCollection without
-    // bound (memory + setData repaint cost). A min-move threshold would fix it.
-    expect(h.pointCount).toBe(200);
+    // Was 200 (one coincident point per tick); now a single footprint — the
+    // source can no longer grow without bound for a stationary drone.
+    expect(h.pointCount).toBe(1);
   });
 
-  it('also appends every tick for sub-step movement below the interpolation spacing', () => {
+  it('sub-step creep paints proportional to ground covered, not once per tick', () => {
     const h = new CoverageHeatmap(asMap(makeMap()));
     h.attach();
     h.append(0, 0, 'D');
-    // Each move is a tenth of the interpolation step — still 1 point per tick.
+    // 50 ticks each a tenth of the interpolation step → total drift of ~5 steps.
+    // The anchor only advances once accumulated drift crosses one step, so the
+    // count tracks distance covered (~5-10), NOT the 51 the buggy version produced.
     for (let i = 1; i <= 50; i++) h.append(0, (STEP / 10) * i, 'D');
-    expect(h.pointCount).toBe(51);
+    expect(h.pointCount).toBeGreaterThanOrEqual(5);
+    expect(h.pointCount).toBeLessThan(20); // far below the buggy one-per-tick (51)
   });
 });
 
-describe('CoverageHeatmap — [BUG B4-2] detach leaks the source/layer', () => {
-  it('detach removes the load listener but NOT the coverage source/layer', () => {
+describe('CoverageHeatmap — [BUG B4-2 FIXED] detach tears down the source/layer', () => {
+  it('detach removes the load listener AND the coverage source/layer', () => {
     const m = makeMap(true);
     const h = new CoverageHeatmap(asMap(m));
     h.attach();
-    h.detach();
-    // If the map outlives the controller (or a React remount happens on a still
-    // -mounted map), the coverage layer/source stay behind. detach() has no
-    // removeLayer/removeSource counterpart to attach().
     expect(m.hasSource()).toBe(true);
     expect(m.hasLayer()).toBe(true);
+    h.detach();
+    // detach() is now a full teardown — no leaked layer/source when the map
+    // outlives the controller or a React remount happens on a still-mounted map.
+    expect(m.hasSource()).toBe(false);
+    expect(m.hasLayer()).toBe(false);
+  });
+
+  it('detach before attach is a safe no-op (existence-guarded removal)', () => {
+    const m = makeMap(true);
+    const h = new CoverageHeatmap(asMap(m));
+    expect(() => h.detach()).not.toThrow();
+    expect(m.hasSource()).toBe(false);
+    expect(m.hasLayer()).toBe(false);
+  });
+
+  it('re-attach after detach re-registers and re-exposes the buffered trail', () => {
+    const m = makeMap(true);
+    const h = new CoverageHeatmap(asMap(m));
+    h.attach();
+    h.append(0, 0, 'D');
+    h.detach();
+    expect(m.hasSource()).toBe(false);
+    h.attach();
+    expect(m.hasSource()).toBe(true);
+    expect(m.lastData()?.features.length).toBe(1); // buffered trail re-pushed
   });
 });
 
-describe('CoverageHeatmap — [BUG B4-3] null droneId funnels every caller into one chain', () => {
-  it('two unrelated positions on the default (null) key bridge with a long interpolated line', () => {
+describe('CoverageHeatmap — [BUG B4-3 FIXED] droneId is required, so chains never cross', () => {
+  it('two different drones keep independent anchors — no bogus bridging line', () => {
     const h = new CoverageHeatmap(asMap(makeMap()));
     h.attach();
-    // Caller forgets to pass droneId → both land on the shared '__global__' key.
-    h.append(0, 0); // drone A
-    const bridged = h.append(0, STEP * 50, undefined); // drone B, far away
-    // Instead of a single fresh point, B is interpolated back to A's coord.
-    expect(bridged).toBe(50);
+    h.append(0, 0, 'DRONE_A'); // drone A
+    // Drone B, far away, on its OWN key → a single fresh point, not 50
+    // interpolated points bridging back to A (the old shared-'__global__' bug).
+    const fresh = h.append(0, STEP * 50, 'DRONE_B');
+    expect(fresh).toBe(1);
+  });
+
+  it('omitting droneId is now a compile-time error (no silent shared key)', () => {
+    const h = new CoverageHeatmap(asMap(makeMap()));
+    h.attach();
+    // @ts-expect-error — droneId is required; the permissive null default is gone.
+    expect(() => h.append(0, 0)).not.toThrow();
   });
 });
