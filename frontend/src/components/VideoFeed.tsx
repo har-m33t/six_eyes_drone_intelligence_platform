@@ -46,6 +46,15 @@ export interface VideoFeedProps {
   frame?: string | null;
   /** YOLO person detections for the current frame; drives the overlay + badge. */
   detections?: Detection[];
+  /**
+   * URL of the drone's pre-recorded clip, played on loop as the tile's base
+   * layer when no live frame is flowing — so the dashboard shows video even
+   * without the Python producer. Live frames (above) take over when present.
+   * Omitted ⇒ the tile falls back to the neutral NO SIGNAL placeholder.
+   */
+  videoSrc?: string;
+  /** Seconds to seek to on first play, to desync drones sharing a clip. */
+  videoStartOffsetS?: number;
 }
 
 interface FrameSize {
@@ -59,6 +68,8 @@ export function VideoFeed({
   status,
   frame,
   detections = [],
+  videoSrc,
+  videoStartOffsetS = 0,
 }: VideoFeedProps) {
   // Native pixel dimensions of the streamed frame, captured on first decode.
   // The YOLO bboxes are in this same pixel space, so the overlay's SVG viewBox
@@ -70,9 +81,17 @@ export function VideoFeed({
   // Keep the (now frozen, greyscale) last frame visible while OFFLINE; only the
   // never-saw-a-frame NO_SIGNAL state shows the placeholder.
   const showImage = hasFrame && status !== 'NO_SIGNAL';
-  const showPlaceholder = !hasFrame && status === 'NO_SIGNAL';
+  // No live frame? Loop the pre-recorded clip so the tile still shows video.
+  // While OFFLINE it greys out under the SIGNAL LOST overlay (same as a frame).
+  const showVideo = !showImage && Boolean(videoSrc);
+  // The neutral placeholder is the last resort — only when there's neither a
+  // live frame nor a clip to fall back to (e.g. tests that pass no `videoSrc`).
+  const showPlaceholder = !showImage && !showVideo && status === 'NO_SIGNAL';
   const hasDetections = detections.length > 0;
   const showOverlay = status === 'LIVE' && hasFrame && hasDetections && frameSize !== null;
+  // Tag the tile as recorded footage (not a live feed) so a playing clip is not
+  // mistaken for a live link — but not while OFFLINE, where SIGNAL LOST rules.
+  const showReplayTag = showVideo && !isOffline;
 
   return (
     <div className={`feed${isOffline ? ' offline' : ''}`} data-drone-id={droneId}>
@@ -81,6 +100,26 @@ export function VideoFeed({
           <div className="pulse" />
           NO SIGNAL
         </div>
+      )}
+
+      {showVideo && (
+        <video
+          className="feed-video"
+          src={videoSrc}
+          autoPlay
+          loop
+          muted
+          playsInline
+          // Seek to the per-drone offset once metadata is known, so drones
+          // sharing a clip don't play in lockstep. Guard against an offset past
+          // the clip length (we'd otherwise seek to the very end and stall).
+          onLoadedMetadata={(e) => {
+            const v = e.currentTarget;
+            if (videoStartOffsetS > 0 && Number.isFinite(v.duration) && videoStartOffsetS < v.duration) {
+              v.currentTime = videoStartOffsetS;
+            }
+          }}
+        />
       )}
 
       {showImage && (
@@ -117,6 +156,15 @@ export function VideoFeed({
         <span>{shortDroneLabel(droneId)}</span>
         <span className="zone">{zone}</span>
       </div>
+
+      {showReplayTag && (
+        // Recorded footage stand-in (no live link yet). `role="status"` keeps it
+        // out of the way of the assertive SIGNAL LOST alert.
+        <div className="feed-replay-badge" role="status">
+          <span className="rec-dot" />
+          REPLAY
+        </div>
+      )}
 
       {status === 'LIVE' && hasDetections && (
         <div className="feed-detect-badge">
