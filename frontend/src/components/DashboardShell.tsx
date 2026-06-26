@@ -81,7 +81,7 @@ export default function DashboardShell({
   intel,
 }: DashboardShellProps) {
   return (
-    <>
+    <div className="shell-root">
       <header className="shell-header">
         <div className="shell-logo">
           SIX&#8209;EYES <span>// DRONE FLEET INTELLIGENCE</span>
@@ -96,17 +96,8 @@ export default function DashboardShell({
           )}
         </div>
 
-        {/* Deploy controls — right-aligned group (margin-left:auto). */}
-        <div className="shell-header-slot right">
-          {deployControls ?? (
-            <span style={{ fontSize: 9.5, color: 'var(--text-dim)' }}>
-              DEPLOY CONTROLS
-            </span>
-          )}
-        </div>
-
         {/* Mission clock — far right. */}
-        <div className="shell-header-slot">
+        <div className="shell-header-slot right">
           {missionClock ?? (
             <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
               MISSION T+ 00:00:00
@@ -114,6 +105,21 @@ export default function DashboardShell({
           )}
         </div>
       </header>
+
+      {/* Command bar — a dedicated full-width row that always holds the swarm
+          command controls (DRAW AREA · CLEAR · DEPLOY SWARM). Lifted out of the
+          cramped brand header so the buttons get their own space and can never
+          be crowded off-screen (ui-fixes #3 — missing action controls). */}
+      <div className="shell-commandbar">
+        <span className="shell-commandbar-label">COMMAND // SWARM CONTROL</span>
+        <div className="shell-commandbar-slot">
+          {deployControls ?? (
+            <span style={{ fontSize: 9.5, color: 'var(--text-dim)' }}>
+              DEPLOY CONTROLS
+            </span>
+          )}
+        </div>
+      </div>
 
       <main className="shell-grid">
         {/* Column 1 — live video feeds. */}
@@ -153,6 +159,6 @@ export default function DashboardShell({
           {intel ?? <Placeholder label="AI Intel Log" hint="Task C3 · IntelPanel" />}
         </section>
       </main>
-    </>
+    </div>
   );
 }
