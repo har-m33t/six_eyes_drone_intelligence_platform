@@ -10,7 +10,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 
 import { VideoGrid, countOnlineFeeds, type DroneFeedData } from './VideoGrid';
 import { VideoFeed, deriveFeedStatus } from './VideoFeed';
-import { DRONE_IDS, ZONES } from '../constants/drones';
+import { DRONE_IDS, DRONE_VIDEO_SOURCES, ZONES } from '../constants/drones';
 import type { DroneId } from '../types/telemetry';
 import { makeDetection, FAKE_FRAME_B64 } from '../test/factories';
 
@@ -78,13 +78,28 @@ describe('VideoGrid', () => {
     });
   });
 
-  it('renders all six even when feeds is sparse (missing drones ⇒ NO_SIGNAL)', () => {
+  it('renders all six even when feeds is sparse (missing drones fall back to their clip)', () => {
     const { container } = render(
       <VideoGrid feeds={{ DRONE_1: { signal: 'STRONG', frame: FAKE_FRAME_B64 } }} />,
     );
     expect(container.querySelectorAll('.feed')).toHaveLength(6);
-    // five placeholders (NO_SIGNAL) + the one live feed
-    expect(container.querySelectorAll('.feed-placeholder')).toHaveLength(5);
+    // The one drone with a live frame renders an <img>; the other five have no
+    // live frame and fall back to looping their pre-recorded clip (<video>), so
+    // the grid shows video for all six rather than five NO SIGNAL placeholders.
+    expect(container.querySelectorAll('img')).toHaveLength(1);
+    expect(container.querySelectorAll('video')).toHaveLength(5);
+    expect(container.querySelectorAll('.feed-placeholder')).toHaveLength(0);
+  });
+
+  it('points each feed at its configured clip (3 clips reused across 6 drones)', () => {
+    const { container } = render(<VideoGrid />);
+    const sources = Array.from(container.querySelectorAll('video')).map((v) =>
+      v.getAttribute('src'),
+    );
+    expect(sources).toHaveLength(6);
+    DRONE_IDS.forEach((id, i) => {
+      expect(sources[i]).toBe(DRONE_VIDEO_SOURCES[id].src);
+    });
   });
 });
 
@@ -150,6 +165,55 @@ describe('VideoFeed render states', () => {
 
     const idle = render(<VideoFeed droneId="DRONE_1" zone="ALPHA" status="NO_SIGNAL" />);
     expect(idle.queryByText('SIGNAL LOST')).toBeNull();
+  });
+});
+
+// ── VideoFeed — pre-recorded clip fallback ─────────────────────────────────
+describe('VideoFeed clip fallback', () => {
+  it('NO_SIGNAL with a videoSrc loops the clip (autoplay/loop/muted) instead of the placeholder', () => {
+    const { container } = render(
+      <VideoFeed droneId="DRONE_1" zone="ALPHA" status="NO_SIGNAL" videoSrc="/footage/drone_1.mp4" />,
+    );
+    const video = container.querySelector('video')!;
+    expect(video).toBeInTheDocument();
+    expect(video.getAttribute('src')).toBe('/footage/drone_1.mp4');
+    expect(video).toHaveProperty('autoplay', true);
+    expect(video).toHaveProperty('loop', true);
+    expect(video).toHaveProperty('muted', true);
+    // No live frame → no placeholder, and the tile is tagged REPLAY (recorded).
+    expect(container.querySelector('.feed-placeholder')).toBeNull();
+    expect(screen.getByText('REPLAY')).toBeInTheDocument();
+  });
+
+  it('a live frame takes over from the clip (img shown, no video, no REPLAY tag)', () => {
+    const { container } = render(
+      <VideoFeed
+        droneId="DRONE_1"
+        zone="ALPHA"
+        status="LIVE"
+        frame={FAKE_FRAME_B64}
+        videoSrc="/footage/drone_1.mp4"
+      />,
+    );
+    expect(container.querySelector('img')).toBeInTheDocument();
+    expect(container.querySelector('video')).toBeNull();
+    expect(screen.queryByText('REPLAY')).toBeNull();
+  });
+
+  it('OFFLINE with no frame greys the clip under SIGNAL LOST and drops the REPLAY tag', () => {
+    const { container } = render(
+      <VideoFeed droneId="DRONE_1" zone="ALPHA" status="OFFLINE" videoSrc="/footage/drone_1.mp4" />,
+    );
+    expect(container.querySelector('video')).toBeInTheDocument();
+    expect(container.querySelector('.feed')!.classList.contains('offline')).toBe(true);
+    expect(screen.getByRole('alert')).toHaveTextContent('SIGNAL LOST');
+    expect(screen.queryByText('REPLAY')).toBeNull();
+  });
+
+  it('still shows the NO SIGNAL placeholder when no clip is configured', () => {
+    const { container } = render(<VideoFeed droneId="DRONE_1" zone="ALPHA" status="NO_SIGNAL" />);
+    expect(container.querySelector('video')).toBeNull();
+    expect(screen.getByText('NO SIGNAL')).toBeInTheDocument();
   });
 });
 
