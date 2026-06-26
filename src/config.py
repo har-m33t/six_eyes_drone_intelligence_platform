@@ -31,6 +31,24 @@ VIDEO_PATHS = {
     "DRONE_6": "footage/drone_2.mp4",  # reused, desynced via START_OFFSETS
 }
 
+# VIDEO_PATHS above are written relative to the project root (`footage/...`).
+# Anchor them to the repo root rather than the process CWD so `python src/main.py`
+# streams video no matter which directory it is launched from. A bare relative
+# path that does not resolve from the CWD makes cv2.VideoCapture fail to open
+# *silently* — OpenCV returns a not-opened capture with no exception — which left
+# every dashboard tile blank with no error (the "feeds missing" failure).
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def resolve_video_path(path: str) -> str:
+    """Resolve a (possibly relative) VIDEO_PATHS entry to an absolute path.
+
+    Absolute paths pass through unchanged; relative ones are anchored at the
+    project root so the producer opens the right file regardless of CWD.
+    """
+    return path if os.path.isabs(path) else os.path.join(_PROJECT_ROOT, path)
+
+
 # Per-drone video start frame — makes the six feeds look genuinely independent.
 # Each offset must stay below the frame count of that drone's assigned clip, and
 # drones sharing a clip must use distinct offsets, or the desync is lost (the
