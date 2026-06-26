@@ -17,6 +17,9 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  /* Let the hint truncate inside the group rather than widen it past the
+     header — the buttons stay full size, the text yields first (ui-fixes #3). */
+  min-width: 0;
 }
 
 .deploy-hint {
@@ -24,6 +27,12 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-dim);
+  /* Informational only: shrink/ellipsis before any command button does. */
+  min-width: 0;
+  flex-shrink: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .deploy-hint.armed {
   color: var(--accent);
@@ -44,6 +53,10 @@
   padding: 7px 16px;
   cursor: pointer;
   transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  /* Command buttons never shrink or wrap their label — they stay fully
+     clickable at any viewport width (ui-fixes #3). */
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .deploy-btn:hover:not(:disabled) {
   background: rgba(167, 139, 250, 0.2);
@@ -56,15 +69,17 @@
   cursor: not-allowed;
 }
 
-/* Secondary/ghost action (DRAW AREA, CLEAR) — neutral until hovered. */
+/* Secondary/ghost action (DRAW AREA, CLEAR) — neutral, but kept legible against
+   the dark command bar (the old dim-on-dark made them look absent — ui-fixes #3).
+   The :disabled rule above still dims them when their action is unavailable. */
 .deploy-btn.ghost {
-  color: var(--text-dim);
-  background: transparent;
-  border-color: var(--line);
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.03);
+  border-color: var(--line-bright);
   font-weight: 400;
 }
 .deploy-btn.ghost:hover:not(:disabled) {
   color: var(--text-primary);
-  border-color: var(--line-bright);
-  background: transparent;
+  border-color: var(--accent-dim);
+  background: rgba(167, 139, 250, 0.08);
 }
