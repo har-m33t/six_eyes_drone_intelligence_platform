@@ -33,3 +33,53 @@
 .tactical-map .mapboxgl-ctrl-group button + button {
   border-top-color: rgba(167, 139, 250, 0.18);
 }
+
+/*
+ * Graceful fallback when Mapbox cannot initialise (no access token / WebGL
+ * unavailable). Shown in place of the map so the panel — and the rest of the
+ * dashboard — stays usable instead of going blank.
+ */
+.tactical-map--error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: repeating-linear-gradient(
+    45deg,
+    #0a0812,
+    #0a0812 12px,
+    #0e0c16 12px,
+    #0e0c16 24px
+  );
+}
+
+.tactical-map__fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 320px;
+  padding: 18px 22px;
+  text-align: center;
+  color: var(--accent);
+  background: rgba(14, 12, 22, 0.92);
+  border: 1px solid var(--accent-dim);
+  border-radius: 8px;
+  box-shadow: 0 0 24px var(--accent-glow);
+}
+
+.tactical-map__fallback-title {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+}
+
+.tactical-map__fallback-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: #c9c2de;
+}
+
+.tactical-map__fallback-hint code {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--accent);
+}
