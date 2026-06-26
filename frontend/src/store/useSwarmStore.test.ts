@@ -11,11 +11,12 @@
  * selector hooks via React's runtime through @testing-library's renderHook.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import {
   useSwarmStore,
   useDrone,
   useDronePositions,
+  useCoveragePositions,
   useFleetSummary,
   useGlobalCoverage,
   type SwarmState,
@@ -30,6 +31,8 @@ const INITIAL: Partial<SwarmState> = {
   missionStartMs: null,
   seenAlerts: [],
   alertCount: 0,
+  missionEpoch: 0,
+  navByDrone: {},
 };
 
 beforeEach(() => {
@@ -287,5 +290,87 @@ describe('adversarial / robustness', () => {
     useSwarmStore.getState().applyNavTelemetry(nav({ current_waypoint_idx: 0, waypoints_remaining: 0 }));
     expect(useSwarmStore.getState().globalCoveragePct).toBe(0);
     expect(Number.isNaN(useSwarmStore.getState().globalCoveragePct)).toBe(false);
+  });
+});
+
+// [BUG B4-4] The map's coverage footprint must wipe on a new search area, not
+// just the % stat. `missionEpoch` is the signal Module B watches to do that.
+describe('missionEpoch — new-search-area signal for the coverage footprint', () => {
+  it('resetCoverage increments missionEpoch (and still zeroes the % stat)', () => {
+    useSwarmStore.setState({ globalCoveragePct: 50 } as Partial<SwarmState> as SwarmState, false);
+    const before = useSwarmStore.getState().missionEpoch;
+
+    useSwarmStore.getState().resetCoverage();
+
+    expect(useSwarmStore.getState().missionEpoch).toBe(before + 1);
+    expect(useSwarmStore.getState().globalCoveragePct).toBe(0);
+  });
+
+  it('clearMission also increments missionEpoch', () => {
+    const before = useSwarmStore.getState().missionEpoch;
+    useSwarmStore.getState().clearMission();
+    expect(useSwarmStore.getState().missionEpoch).toBe(before + 1);
+  });
+
+  it('useMissionEpoch reflects the bumped value', () => {
+    const { result } = renderHook(() => useSwarmStore((s) => s.missionEpoch));
+    const before = result.current;
+    act(() => useSwarmStore.getState().resetCoverage());
+    expect(result.current).toBe(before + 1);
+  });
+});
+
+// [BUG B4-5] The coverage footprint must be painted from the nav search-sweep
+// (NavTelemetry x/y), not from the GPS `drones` packets. The store keeps the
+// raw nav frames and `useCoveragePositions()` exposes them to Module B.
+describe('useCoveragePositions — nav-driven coverage footprint source', () => {
+  it('exposes the search-sweep position from a nav frame (x/y → lng/lat)', () => {
+    const { result } = renderHook(() => useCoveragePositions());
+    expect(result.current).toEqual([]); // nothing until a mission flies
+
+    act(() =>
+      useSwarmStore
+        .getState()
+        .applyNavTelemetry(nav({ drone_id: 'DRONE_2', x: -118.1, y: 34.2 })),
+    );
+
+    expect(result.current).toEqual([
+      { id: 'DRONE_2', lng: -118.1, lat: 34.2, coverageActive: true },
+    ]);
+  });
+
+  it('marks a transiting drone (coverage_active false) so the trail breaks', () => {
+    const { result } = renderHook(() => useCoveragePositions());
+    act(() =>
+      useSwarmStore
+        .getState()
+        .applyNavTelemetry(nav({ drone_id: 'DRONE_1', x: 1, y: 2, coverage_active: false })),
+    );
+    expect(result.current[0]).toMatchObject({ coverageActive: false });
+  });
+
+  it('omits a drone whose nav x/y is non-finite (junk frame)', () => {
+    const { result } = renderHook(() => useCoveragePositions());
+    act(() =>
+      useSwarmStore
+        .getState()
+        .applyNavTelemetry(nav({ drone_id: 'DRONE_4', x: Number.NaN, y: 5 })),
+    );
+    expect(result.current).toEqual([]);
+  });
+
+  it('GPS packets do NOT populate the coverage positions (only nav frames do)', () => {
+    const { result } = renderHook(() => useCoveragePositions());
+    act(() => useSwarmStore.getState().applyDronePacket(drone({ drone_id: 'DRONE_1' })));
+    expect(result.current).toEqual([]);
+  });
+
+  it('resetCoverage drops the sweep positions so a new mission starts clean', () => {
+    const { result } = renderHook(() => useCoveragePositions());
+    act(() => useSwarmStore.getState().applyNavTelemetry(nav({ drone_id: 'DRONE_1', x: 1, y: 2 })));
+    expect(result.current).toHaveLength(1);
+
+    act(() => useSwarmStore.getState().resetCoverage());
+    expect(result.current).toEqual([]);
   });
 });
