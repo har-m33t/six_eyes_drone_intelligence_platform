@@ -11,15 +11,33 @@
  * canvas, intel logs) arrive via slot props from Modules B / C2 / C3.
  */
 
+/* ── Root column ── */
+/* The shell stacks three fixed-purpose rows then a flexing body: the brand
+   header, the command bar, and the tactical grid. A flex column (rather than the
+   old `height: calc(100vh - 48px)` magic number on the grid) means each bar can
+   own its natural height and the grid simply takes the rest — adding the command
+   bar can't push anything off-screen. */
+.shell-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
 /* ── Header ── */
 .shell-header {
   height: 48px;
+  flex-shrink: 0;
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
   padding: 0 20px;
   background: var(--bg-panel);
   gap: 24px;
+  /* The header is a single non-wrapping row. Clip rather than let any item
+     spill past the bar — combined with the flex rules below, the only thing
+     that ever shrinks here is the branding logo. */
+  overflow: hidden;
 }
 
 .shell-logo {
@@ -28,6 +46,15 @@
   letter-spacing: 0.12em;
   color: var(--accent);
   text-shadow: 0 0 8px var(--accent-glow);
+  /* The logo yields space first: on a narrow / display-scaled viewport it
+     truncates with an ellipsis so the deploy controls and mission clock to its
+     right stay fully on-screen instead of being pushed off the right edge
+     (ui-fixes #3 — missing action controls). */
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .shell-logo span {
   color: var(--text-dim);
@@ -42,17 +69,61 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  /* Status badge / mission clock keep their full width — they must never be the
+     items that get clipped when the row is tight (ui-fixes #3). */
+  flex-shrink: 0;
 }
 .shell-header-slot.right {
   margin-left: auto;
+  /* Mission clock stays pinned to the right and never shrinks. */
+  flex-shrink: 0;
+}
+
+/* ── Command bar ── */
+/* A dedicated full-width row that owns the swarm command controls. Because it is
+   its own row (not competing with the logo/clock for header space), the DRAW
+   AREA · CLEAR · DEPLOY SWARM buttons are always fully visible (ui-fixes #3). */
+.shell-commandbar {
+  height: 46px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 20px;
+  background: var(--bg-panel-raised);
+  border-bottom: 1px solid var(--line);
+}
+.shell-commandbar-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* Controls group sits at the right edge; min-width:0 lets the inner status hint
+   truncate before any button is ever clipped. */
+.shell-commandbar-slot {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  min-width: 0;
 }
 
 /* ── Layout grid ── */
 .shell-grid {
   display: grid;
   grid-template-columns: 1.4fr 1fr 0.85fr;
-  grid-template-rows: 1fr auto;
-  height: calc(100vh - 48px);
+  /* The AI intel strip occupies the bottom row. It MUST stay a fixed,
+     bounded height: its inner `.intel-stream` accumulates up to 50 log lines,
+     and an `auto` row would grow to fit them all — turning the log into a wall
+     of text that squeezes the map above it (ui-fixes #1). A bounded row makes
+     the stream's `overflow-y: auto` engage so the log scrolls inside it. */
+  grid-template-rows: minmax(0, 1fr) clamp(96px, 18vh, 168px);
+  /* Takes whatever vertical space the header + command bar leave (flex column
+     parent), instead of a hard-coded `calc(100vh - 48px)` that ignored the bar. */
+  flex: 1;
+  min-height: 0;
   gap: 1px;
   background: var(--line);
 }
@@ -63,6 +134,9 @@
   flex-direction: column;
   overflow: hidden;
   grid-row: 1;
+  /* Allow the column panels to shrink within the 1fr row instead of being
+     pushed open by their content (keeps the map from overflowing). */
+  min-height: 0;
 }
 
 .shell-panel-head {
