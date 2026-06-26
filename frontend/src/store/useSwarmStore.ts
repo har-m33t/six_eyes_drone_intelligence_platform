@@ -58,6 +58,20 @@ export interface DronePosition {
   coverageActive: boolean;
 }
 
+/**
+ * A drone's search-sweep position, derived from `NavTelemetry` (NOT the GPS
+ * `DronePacket`). For Mapbox-drawn missions `x`/`y` ARE `lng`/`lat`, so this is
+ * exactly what the legacy `handleNavTelemetry → recordCoverage(x, y)` painted.
+ * Drives the B4 coverage footprint; the GPS `DronePosition` drives the markers.
+ */
+export interface CoveragePosition {
+  id: DroneId;
+  lng: number;
+  lat: number;
+  /** false ⇒ transiting to the search start; the footprint breaks the segment. */
+  coverageActive: boolean;
+}
+
 /** Per-drone waypoint progress, the basis of the global "% SEARCHED" stat. */
 export interface CoverageProgress {
   current: number;
@@ -91,6 +105,21 @@ export interface SwarmState {
   seenAlerts: string[];
   /** Running alert count (legacy `alertCount`). */
   alertCount: number;
+  /**
+   * Monotonic "new search area" counter, bumped whenever coverage is reset
+   * (deploy / clear / full mission reset). Module B's coverage footprint
+   * (`CoverageHeatmap`) watches it to wipe the accumulated map trail when a new
+   * mission starts — `resetCoverage()` alone only zeroes the % SEARCHED stat,
+   * not the visual trail (review bug B4-4).
+   */
+  missionEpoch: number;
+  /**
+   * Latest raw NavTelemetry frame per drone — the search-sweep position that
+   * drives the coverage footprint (review bug B4-5). Kept distinct from the GPS
+   * `drones` packets (which drive the live markers) because the footprint must
+   * trace the boustrophedon route, not the drone's GPS wander.
+   */
+  navByDrone: Partial<Record<DroneId, NavTelemetry>>;
 
   // ── Mutation actions (the A3-facing write surface) ──────────────────────
   /** Route any inbound frame to the correct handler (uses A1's guard). */
@@ -155,6 +184,35 @@ function toPosition(pkt: DronePacket): DronePosition | null {
   return pos;
 }
 
+/**
+ * Per-frame `CoveragePosition` cache, keyed on the `NavTelemetry` object
+ * identity — same stability trick as `toPosition`, so a drone whose nav frame
+ * did not change yields the same reference and `useShallow` short-circuits.
+ * Returns `null` for a non-finite `x`/`y` (the drone is then omitted). For
+ * Mapbox missions `x`/`y` are `lng`/`lat`.
+ */
+const coveragePositionCache = new WeakMap<NavTelemetry, CoveragePosition | null>();
+
+function toCoveragePosition(nav: NavTelemetry): CoveragePosition | null {
+  const cached = coveragePositionCache.get(nav);
+  if (cached !== undefined) return cached;
+
+  const lng = nav.x;
+  const lat = nav.y;
+  const pos: CoveragePosition | null =
+    Number.isFinite(lng) && Number.isFinite(lat)
+      ? {
+          id: nav.drone_id,
+          lng,
+          lat,
+          coverageActive: nav.coverage_active !== false,
+        }
+      : null;
+
+  coveragePositionCache.set(nav, pos);
+  return pos;
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Store
 // ──────────────────────────────────────────────────────────────────────────
@@ -167,6 +225,8 @@ export const useSwarmStore = create<SwarmState>((set, get) => ({
   missionStartMs: null,
   seenAlerts: [],
   alertCount: 0,
+  missionEpoch: 0,
+  navByDrone: {},
 
   ingest: (msg) => {
     // Defensive: A3 already null/object-guards before calling, but `ingest` is a
@@ -233,7 +293,12 @@ export const useSwarmStore = create<SwarmState>((set, get) => ({
       const doneWp = tracked.reduce((s, d) => s + d.current, 0);
       const globalCoveragePct = totalWp > 0 ? (doneWp / totalWp) * 100 : 0;
 
-      return { coverage, globalCoveragePct };
+      // Keep the raw frame so the coverage footprint can paint the search sweep
+      // (B4-5). Like `drones`, untouched entries keep identity → the positions
+      // selector's per-frame cache stays stable for unchanged drones.
+      const navByDrone = { ...state.navByDrone, [id as DroneId]: nav };
+
+      return { coverage, globalCoveragePct, navByDrone };
     }),
 
   setConnection: (status) =>
@@ -248,16 +313,27 @@ export const useSwarmStore = create<SwarmState>((set, get) => ({
           : state.missionStartMs,
     })),
 
-  resetCoverage: () => set({ coverage: {}, globalCoveragePct: 0 }),
+  resetCoverage: () =>
+    set((state) => ({
+      coverage: {},
+      globalCoveragePct: 0,
+      // Drop stale sweep positions so the cleared trail isn't immediately
+      // re-seeded at the previous mission's coordinates (B4-5).
+      navByDrone: {},
+      // Bump so Module B's coverage footprint clears its map trail too (B4-4).
+      missionEpoch: state.missionEpoch + 1,
+    })),
 
   clearMission: () =>
-    set({
+    set((state) => ({
       drones: {},
       coverage: {},
       globalCoveragePct: 0,
+      navByDrone: {},
       seenAlerts: [],
       alertCount: 0,
-    }),
+      missionEpoch: state.missionEpoch + 1,
+    })),
 }));
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -275,6 +351,14 @@ export const useConnection = (): ConnectionStatus =>
 /** Global waypoint-weighted coverage percentage. */
 export const useGlobalCoverage = (): number =>
   useSwarmStore((s) => s.globalCoveragePct);
+
+/**
+ * "New search area" epoch — increments on every coverage reset (deploy / clear).
+ * Module B's `TacticalMap` passes it as `coverageEpoch` so the footprint trail
+ * is wiped when a fresh mission starts (review bug B4-4).
+ */
+export const useMissionEpoch = (): number =>
+  useSwarmStore((s) => s.missionEpoch);
 
 /** Mission start epoch (ms) for the clock; null until first packet/connect. */
 export const useMissionStart = (): number | null =>
@@ -294,6 +378,26 @@ export const useDronePositions = (): DronePosition[] =>
       for (const pkt of Object.values(s.drones)) {
         if (!pkt) continue;
         const pos = toPosition(pkt);
+        if (pos !== null) out.push(pos);
+      }
+      return out;
+    }),
+  );
+
+/**
+ * Live search-sweep positions for Module B's coverage footprint (B4), derived
+ * from NavTelemetry — what the legacy `recordCoverage(x, y)` painted. Identity-
+ * stable via `toCoveragePosition`, so the hook re-renders only when a drone's
+ * nav frame changes. Empty until a mission is deployed (no nav frames yet), so
+ * no footprint is painted before the swarm starts flying its route.
+ */
+export const useCoveragePositions = (): CoveragePosition[] =>
+  useSwarmStore(
+    useShallow((s) => {
+      const out: CoveragePosition[] = [];
+      for (const nav of Object.values(s.navByDrone)) {
+        if (!nav) continue;
+        const pos = toCoveragePosition(nav);
         if (pos !== null) out.push(pos);
       }
       return out;
