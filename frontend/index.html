@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SIX-EYES // Drone Fleet Intelligence</title>
+    <!--
+      Runtime config (Mapbox token / WS URL) injected by the Python dashboard
+      server at /runtime-config.js as window.SIX_EYES_CONFIG. The token comes
+      from .env on the server and is fetched here at runtime — never bundled.
+
+      This is a CLASSIC (blocking) script placed BEFORE the app module, so the
+      global is guaranteed to be set before the map initialises (a deferred or
+      dynamically-injected script could race the React mount). Under `vite dev`
+      the path is proxied to the dashboard server (see vite.config.ts); if that
+      server isn't running the request 404s and `onerror` logs an informational
+      note — the app still loads and the map shows a graceful fallback.
+    -->
+    <script
+      src="/runtime-config.js"
+      onerror="window.console && console.info('[six-eyes] runtime-config unavailable — start `python -m src.dashboard_server` (or set VITE_MAPBOX_ACCESS_TOKEN). The map will show a fallback until a token is configured.')"
+    ></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
