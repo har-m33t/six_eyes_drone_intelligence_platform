@@ -133,6 +133,7 @@ vi.mock('mapbox-gl', () => ({ default: mapboxglMock }));
 vi.mock('@mapbox/mapbox-gl-draw', () => ({ default: drawMock }));
 
 import { TacticalMap } from './TacticalMap';
+import { CoverageHeatmap } from '../map/coverageHeatmap';
 
 /** A store-shaped position (`DronePosition` from the A2 store / B2 marker module). */
 function pos(overrides: Partial<DronePosition> = {}): DronePosition {
@@ -288,17 +289,55 @@ describe('TacticalMap — [BUG B1-2 FIXED] composes the Module-B layer', () => {
     expect(onPerimeterDrawn).toHaveBeenCalledWith([[0, 0], [1, 0], [1, 1]]);
   });
 
-  it('paints a coverage footprint for an actively-covering drone', () => {
+  it('[BUG B4-5 FIXED] paints the footprint from the nav sweep, not GPS positions', () => {
+    render(
+      <TacticalMap
+        accessToken="t"
+        // GPS position drives the marker only (note the far-away coords)…
+        positions={[pos({ id: 'DRONE_1', lng: 99, lat: 88 })]}
+        // …while the nav search-sweep position drives the footprint.
+        coveragePositions={[{ id: 'DRONE_2', lng: 5, lat: 5, coverageActive: true }]}
+      />,
+    );
+    maps[0].fireLoad();
+
+    // The coverage source registers with the buffered footprint, painted at the
+    // NAV coordinate (5,5) — NOT the GPS marker coordinate (99,88).
+    expect(maps[0].addSource).toHaveBeenCalledWith('coverage-source', expect.anything());
+    const data = maps[0].addSource.mock.calls[0][1].data;
+    expect(data.features.length).toBeGreaterThan(0);
+    expect(data.features[0].geometry.coordinates).toEqual([5, 5]);
+
+    // The GPS position still produced exactly one marker.
+    expect(markers).toHaveLength(1);
+  });
+
+  it('[BUG B4-5 FIXED] does NOT paint coverage from GPS positions alone', () => {
     render(
       <TacticalMap
         accessToken="t"
         positions={[pos({ id: 'DRONE_2', lng: 5, lat: 5, coverageActive: true })]}
       />,
     );
-    // Coverage source/layer register on load, then the buffered append flushes.
     maps[0].fireLoad();
-    expect(maps[0].addSource).toHaveBeenCalledWith('coverage-source', expect.anything());
+
+    // Source/layer still register (attach is unconditional), but with NO points —
+    // GPS no longer drives the footprint.
     expect(maps[0].addLayer).toHaveBeenCalled();
+    const data = maps[0].addSource.mock.calls[0][1].data;
+    expect(data.features.length).toBe(0);
+  });
+
+  it('breaks the segment for a transiting drone (coverageActive false) — no point', () => {
+    render(
+      <TacticalMap
+        accessToken="t"
+        coveragePositions={[{ id: 'DRONE_3', lng: 7, lat: 7, coverageActive: false }]}
+      />,
+    );
+    maps[0].fireLoad();
+    const data = maps[0].addSource.mock.calls[0][1].data;
+    expect(data.features.length).toBe(0);
   });
 });
 
@@ -320,5 +359,35 @@ describe('TacticalMap — [BUG B1-3 FIXED] onReady is read live', () => {
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledWith(maps[0]);
+  });
+});
+
+// ── Coverage footprint wiped on a new mission (the B4-4 fix) ──────────────────
+
+describe('TacticalMap — [BUG B4-4 FIXED] coverage footprint clears on a new mission', () => {
+  it('does NOT clear the footprint on first mount', () => {
+    const clearSpy = vi.spyOn(CoverageHeatmap.prototype, 'clear');
+    render(<TacticalMap accessToken="t" coverageEpoch={0} />);
+    expect(clearSpy).not.toHaveBeenCalled();
+  });
+
+  it('clears the footprint when coverageEpoch increments (deploy / clear)', () => {
+    const clearSpy = vi.spyOn(CoverageHeatmap.prototype, 'clear');
+    const { rerender } = render(<TacticalMap accessToken="t" coverageEpoch={0} />);
+    expect(clearSpy).not.toHaveBeenCalled();
+
+    rerender(<TacticalMap accessToken="t" coverageEpoch={1} />);
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+
+    // A re-render with the SAME epoch must not re-clear (idempotent).
+    rerender(<TacticalMap accessToken="t" coverageEpoch={1} />);
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the footprint alone when coverageEpoch is not supplied', () => {
+    const clearSpy = vi.spyOn(CoverageHeatmap.prototype, 'clear');
+    const { rerender } = render(<TacticalMap accessToken="t" />);
+    rerender(<TacticalMap accessToken="t" positions={[pos({ coverageActive: true })]} />);
+    expect(clearSpy).not.toHaveBeenCalled();
   });
 });
