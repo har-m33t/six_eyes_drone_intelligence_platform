@@ -227,91 +227,138 @@ export function IntelPanel({
 // Local intel synthesis (LOCAL SIM fallback — mirrors legacy generateLocalIntel)
 // ──────────────────────────────────────────────────────────────────────────
 
-/**
- * The STABLE identity of the current intel situation — severity + what kind of
- * event + which drone/zone. Deliberately excludes the volatile `value`
- * (confidence/battery %, which wiggles ±1 every 20 Hz frame): this is the de-dup
- * key, so a sustained detection whose confidence merely drifts is ONE event, not
- * one log line per frame. Returning only primitives lets the store selector use
- * `useShallow`, so `ConnectedIntelPanel` re-renders only when the situation
- * (not the noisy value) actually changes.
- */
-interface IntelKey {
-  severity: IntelSeverity;
-  kind: 'idle' | 'lost' | 'detection' | 'battery' | 'nominal';
-  droneId: string;
-  zone: string;
+/** The kind of situation an intel line describes. */
+type IntelKind = 'idle' | 'lost' | 'detection' | 'battery' | 'nominal';
+
+/** True for the three actionable alert kinds (everything except idle/nominal). */
+function isAlertKind(kind: IntelKind): boolean {
+  return kind === 'lost' || kind === 'detection' || kind === 'battery';
 }
 
 /**
- * A full descriptor: the stable `IntelKey` plus the display-only `value`. The
- * value is read FRESH at append time (when the situation transitions), so the
- * logged line shows the confidence/battery at the moment the event began — but
- * `value` never participates in de-dup (see `IntelKey`).
+ * One synthesized situation for a single drone (or the swarm-wide idle/nominal
+ * fallback). `value` is the display-only volatile reading — confidence% for a
+ * detection, battery% for a battery alert, online count for nominal — read fresh
+ * each derivation. It feeds a grouped line's range/latest but NEVER participates
+ * in a line's identity (see `descriptorKey`), so a detection whose confidence
+ * wiggles ±1 every 20 Hz frame stays one line.
  */
-interface IntelDescriptor extends IntelKey {
-  /** confidence% (detection) | battery% (battery) | online count (nominal). */
+interface IntelDescriptor {
+  severity: IntelSeverity;
+  kind: IntelKind;
+  droneId: string;
+  zone: string;
   value: number;
 }
 
-/** Project the de-dup key out of a full descriptor (drops volatile `value`). */
-function intelKey(d: IntelDescriptor): IntelKey {
-  return { severity: d.severity, kind: d.kind, droneId: d.droneId, zone: d.zone };
+/**
+ * The STABLE identity of a situation: kind + drone + zone, with the volatile
+ * `value` deliberately excluded. Two detections of the same drone/zone whose
+ * confidence merely drifts share one key, so they coalesce into a single grouped
+ * line instead of spamming one line per frame (ui-fixes issue 6). Returning a
+ * primitive string lets the store selector use `useShallow` over the key array,
+ * so `ConnectedIntelPanel` re-renders only when the SET of situations changes.
+ */
+function descriptorKey(d: IntelDescriptor): string {
+  return `${d.kind}:${d.droneId}:${d.zone}`;
 }
 
-/** Priority order matches the legacy strip: lost → detection → battery → nominal. */
-function deriveIntel(drones: Partial<Record<DroneId, DronePacket>>): IntelDescriptor {
+/**
+ * Derive EVERY active situation — one descriptor per drone with an alert
+ * condition (per-drone priority: lost → detection → battery). Returning the full
+ * set (not just the single highest-priority "headline") is what fixes the spam:
+ * two drones detecting at once each get their own grouped line instead of
+ * fighting over one slot and oscillating, which previously appended a fresh line
+ * on every flip. When no drone has an alert, returns a single nominal descriptor
+ * (or idle, before any telemetry).
+ */
+function deriveIntelAll(drones: Partial<Record<DroneId, DronePacket>>): IntelDescriptor[] {
   const list = Object.values(drones).filter((d): d is DronePacket => Boolean(d));
   if (list.length === 0) {
-    return { severity: 'normal', kind: 'idle', droneId: '', zone: '', value: 0 };
+    return [{ severity: 'normal', kind: 'idle', droneId: '', zone: '', value: 0 }];
   }
 
-  const lost = list.find((d) => d.health.signal === 'LOST');
-  if (lost) {
-    return {
-      severity: 'critical',
-      kind: 'lost',
-      droneId: lost.drone_id,
-      zone: lost.mission.zone,
-      value: 0,
-    };
+  const alerts: IntelDescriptor[] = [];
+  for (const d of list) {
+    if (d.health.signal === 'LOST') {
+      alerts.push({
+        severity: 'critical',
+        kind: 'lost',
+        droneId: d.drone_id,
+        zone: d.mission.zone,
+        value: 0,
+      });
+    } else if (d.detections && d.detections.length > 0) {
+      alerts.push({
+        severity: 'warning',
+        kind: 'detection',
+        droneId: d.drone_id,
+        zone: d.mission.zone,
+        value: Math.round(d.detections[0].confidence * 100),
+      });
+    } else if (d.health.status === 'CRITICAL') {
+      alerts.push({
+        severity: 'warning',
+        kind: 'battery',
+        droneId: d.drone_id,
+        zone: d.mission.zone,
+        value: Math.round(d.health.battery),
+      });
+    }
   }
-
-  const detected = list.find((d) => d.detections && d.detections.length > 0);
-  if (detected) {
-    return {
-      severity: 'warning',
-      kind: 'detection',
-      droneId: detected.drone_id,
-      zone: detected.mission.zone,
-      value: Math.round(detected.detections[0].confidence * 100),
-    };
-  }
-
-  const critical = list.find((d) => d.health.status === 'CRITICAL');
-  if (critical) {
-    return {
-      severity: 'warning',
-      kind: 'battery',
-      droneId: critical.drone_id,
-      zone: critical.mission.zone,
-      value: Math.round(critical.health.battery),
-    };
-  }
+  if (alerts.length > 0) return alerts;
 
   const online = list.filter((d) => d.health.status === 'ONLINE').length;
-  return { severity: 'normal', kind: 'nominal', droneId: '', zone: '', value: online };
+  return [{ severity: 'normal', kind: 'nominal', droneId: '', zone: '', value: online }];
 }
 
-/** Format a descriptor into the legacy strip's rich text (segments + flat text). */
-function formatIntel(d: IntelDescriptor): Pick<IntelLogEntry, 'segments' | 'text'> {
+// ──────────────────────────────────────────────────────────────────────────
+// Grouped alert log (ui-fixes issue 6 — coalesce repeats into one updating line)
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * A coalesced intel line. Repeated observations of the same `key` within
+ * `GROUP_WINDOW_MS` fold into one of these — bumping `count`, widening the
+ * [`valueMin`, `valueMax`] range and refreshing `lastTs` — so a sustained,
+ * flickering detection reads as a single "Person detected … 49–69% (×N)" line
+ * that UPDATES in place, never a fresh line per frame.
+ */
+interface AlertGroup {
+  /** Stable React key — kept across updates so the line mutates, not remounts. */
+  id: string;
+  /** `descriptorKey` identity that groups observations together. */
+  key: string;
+  kind: IntelKind;
+  droneId: string;
+  zone: string;
+  severity: IntelSeverity;
+  /** Epoch ms of the most recent observation (drives the line's clock). */
+  lastTs: number;
+  /** How many times this active alert has been (re)observed. */
+  count: number;
+  valueMin: number;
+  valueMax: number;
+  latestValue: number;
+}
+
+/** Repeats of an alert this long after its last sighting open a FRESH line. */
+const GROUP_WINDOW_MS = 12_000;
+
+/** `min%`, or `min–max%` once the observed range has spread. */
+function rangePct(min: number, max: number): string {
+  return min === max ? `${min}%` : `${min}–${max}%`;
+}
+
+/** Render a grouped alert into the pure panel's `{ segments, text }` shape. */
+function formatGroup(g: AlertGroup): Pick<IntelLogEntry, 'segments' | 'text'> {
+  const times = g.count > 1 ? ` (×${g.count})` : '';
   let segments: IntelSegment[];
-  switch (d.kind) {
+  switch (g.kind) {
     case 'lost':
       segments = [
-        { text: `${d.droneId} has lost signal`, emphasis: 'crit-hl' },
+        { text: `${g.droneId} has lost signal`, emphasis: 'crit-hl' },
         {
-          text: ` in Zone ${d.zone}. Recommend redirecting nearest available unit to maintain zone coverage.`,
+          text: ` in Zone ${g.zone}${times}. Recommend redirecting nearest available unit to maintain zone coverage.`,
         },
       ];
       break;
@@ -319,20 +366,20 @@ function formatIntel(d: IntelDescriptor): Pick<IntelLogEntry, 'segments' | 'text
       segments = [
         { text: 'Person detected', emphasis: 'hl' },
         {
-          text: ` by ${d.droneId} in Zone ${d.zone} at ${d.value}% confidence. Recommend prioritizing this zone for ground team dispatch.`,
+          text: ` by ${g.droneId} in Zone ${g.zone} at ${rangePct(g.valueMin, g.valueMax)} confidence${times}. Recommend prioritizing this zone for ground team dispatch.`,
         },
       ];
       break;
     case 'battery':
       segments = [
-        { text: `${d.droneId} battery critical`, emphasis: 'hl' },
-        { text: ` at ${d.value}%. Recommend return-to-base.` },
+        { text: `${g.droneId} battery critical`, emphasis: 'hl' },
+        { text: ` at ${rangePct(g.valueMin, g.valueMax)}${times}. Recommend return-to-base.` },
       ];
       break;
     case 'nominal':
       segments = [
         {
-          text: `All systems nominal. ${d.value}/6 drones online, no active detections. Mission proceeding as planned.`,
+          text: `All systems nominal. ${g.latestValue}/6 drones online, no active detections. Mission proceeding as planned.`,
         },
       ];
       break;
@@ -348,6 +395,74 @@ function formatIntel(d: IntelDescriptor): Pick<IntelLogEntry, 'segments' | 'text
   return { segments, text: segments.map((s) => s.text).join('') };
 }
 
+/** Project a grouped alert to the immutable log-entry the pure panel renders. */
+function groupToEntry(g: AlertGroup): IntelLogEntry {
+  return { id: g.id, severity: g.severity, timestamp: g.lastTs, ...formatGroup(g) };
+}
+
+/**
+ * Fold the current descriptors into the running group list. Active alerts
+ * coalesce into (or open) their group; the idle/nominal status line is appended
+ * only when NO alert is still live in the window — so it never interleaves with
+ * the flicker gaps of an ongoing detection. Returns `prev` unchanged when there
+ * is nothing to do, keeping the array reference stable to avoid a needless render.
+ */
+function coalesce(
+  prev: AlertGroup[],
+  descriptors: IntelDescriptor[],
+  now: number,
+  nextId: () => string,
+): AlertGroup[] {
+  const alerts = descriptors.filter((d) => isAlertKind(d.kind));
+  if (alerts.length === 0) {
+    const ongoing = prev.some(
+      (g) => isAlertKind(g.kind) && now - g.lastTs <= GROUP_WINDOW_MS,
+    );
+    if (ongoing) return prev; // suppress idle/nominal while an alert flickers
+  }
+
+  const next = prev.slice();
+  const upsert = (d: IntelDescriptor) => {
+    const key = descriptorKey(d);
+    let idx = -1;
+    for (let i = next.length - 1; i >= 0; i--) {
+      if (next[i].key === key) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx >= 0 && now - next[idx].lastTs <= GROUP_WINDOW_MS) {
+      const g = next[idx];
+      next[idx] = {
+        ...g,
+        severity: d.severity,
+        lastTs: now,
+        count: g.count + 1,
+        valueMin: Math.min(g.valueMin, d.value),
+        valueMax: Math.max(g.valueMax, d.value),
+        latestValue: d.value,
+      };
+    } else {
+      next.push({
+        id: nextId(),
+        key,
+        kind: d.kind,
+        droneId: d.droneId,
+        zone: d.zone,
+        severity: d.severity,
+        lastTs: now,
+        count: 1,
+        valueMin: d.value,
+        valueMax: d.value,
+        latestValue: d.value,
+      });
+    }
+  };
+
+  (alerts.length > 0 ? alerts : descriptors).forEach(upsert);
+  return next.length > MAX_LOG_LINES ? next.slice(-MAX_LOG_LINES) : next;
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Store-connected container (Module A binding seam)
 // ──────────────────────────────────────────────────────────────────────────
@@ -359,38 +474,36 @@ export interface ConnectedIntelPanelProps {
 
 /**
  * Wires the pure `IntelPanel` to the swarm store. The `useShallow` selector
- * returns only the STABLE `IntelKey` (no volatile `value`), so this component
- * re-renders — and the log gains a line — exactly once per distinct situation
- * (mirroring the legacy de-dupe), never one per 20 Hz frame even while a
- * detection's confidence wiggles. The display `value` is read fresh from the
- * store at append time, so the logged line still shows the confidence/battery at
- * the moment the event began.
+ * returns the STABLE key of every active situation (no volatile `value`), so
+ * this component re-renders only when the SET of situations changes — a new
+ * alert appears or one clears — never one render per 20 Hz frame while a
+ * detection's confidence wiggles.
+ *
+ * On each such change it folds the FRESH descriptors into a GROUPED log
+ * (`coalesce`): a sustained, flickering detection becomes one line that updates
+ * in place with a widening confidence range and a repeat count, rather than a
+ * new "Person detected …" line every second (ui-fixes issue 6).
  */
 export function ConnectedIntelPanel({ sourceLive = false }: ConnectedIntelPanelProps = {}) {
-  const key = useSwarmStore(useShallow((s) => intelKey(deriveIntel(s.drones))));
+  const activeKeys = useSwarmStore(
+    useShallow((s) => deriveIntelAll(s.drones).map(descriptorKey)),
+  );
   const coveragePct = useGlobalCoverage();
 
-  const [logs, setLogs] = useState<IntelLogEntry[]>([]);
+  const [groups, setGroups] = useState<AlertGroup[]>([]);
   const seqRef = useRef(0);
 
-  // `key` keeps referential identity (useShallow) until the SITUATION changes,
-  // so this effect appends exactly one capped log line per change. Read the full
-  // descriptor (with the current value) fresh here rather than from `key`.
+  // `activeKeys` keeps referential identity (useShallow) until the situation set
+  // changes, so this effect runs per distinct event, never per frame. Read the
+  // full descriptors (with their current values) fresh here rather than the keys.
   useEffect(() => {
-    const descriptor = deriveIntel(useSwarmStore.getState().drones);
-    const { text, segments } = formatIntel(descriptor);
-    const entry: IntelLogEntry = {
-      id: `${Date.now()}-${seqRef.current++}`,
-      text,
-      segments,
-      severity: descriptor.severity,
-      timestamp: Date.now(),
-    };
-    setLogs((prev) => {
-      const next = [...prev, entry];
-      return next.length > MAX_LOG_LINES ? next.slice(-MAX_LOG_LINES) : next;
-    });
-  }, [key]);
+    const descriptors = deriveIntelAll(useSwarmStore.getState().drones);
+    setGroups((prev) =>
+      coalesce(prev, descriptors, Date.now(), () => `${Date.now()}-${seqRef.current++}`),
+    );
+  }, [activeKeys]);
+
+  const logs = useMemo(() => groups.map(groupToEntry), [groups]);
 
   return <IntelPanel logs={logs} coveragePct={coveragePct} sourceLive={sourceLive} />;
 }
