@@ -114,8 +114,8 @@ describe('ConnectedIntelPanel % searched wiring', () => {
 // ── Documented bug: detection confidence churn spams the log ───────────────
 describe('ConnectedIntelPanel detection churn (BUG: confidence in descriptor)', () => {
   // The component's docstring claims "exactly one entry per distinct intel
-  // event, never one per frame." FIXED: de-dup now keys on the stable
-  // `IntelKey` (severity/kind/droneId/zone) and excludes the volatile rounded
+  // event, never one per frame." FIXED: the log keys on the stable
+  // `descriptorKey` (kind/droneId/zone) and excludes the volatile rounded
   // confidence, so a sustained detection whose confidence wiggles 1% per frame
   // keeps a single log line; the displayed value is read fresh at append time.
   it('keeps a single line while one drone stays detected (confidence wiggles)', () => {
@@ -128,5 +128,46 @@ describe('ConnectedIntelPanel detection churn (BUG: confidence in descriptor)', 
       pushPacket({ drone_id: 'DRONE_3', detections: [makeDetection({ confidence: c })] });
     }
     expect(logLines(container).length).toBe(before); // expect no spam
+  });
+});
+
+// ── ui-fixes issue 6: alert spam / lack of grouping ────────────────────────
+describe('ConnectedIntelPanel alert grouping (ui-fixes issue 6)', () => {
+  // A YOLO detection flickers on/off between inference frames, so previously the
+  // situation oscillated detection→nominal→detection and appended a fresh
+  // "Person detected …" line on every flip. The grouped log must coalesce these
+  // into ONE updating line carrying a confidence range + repeat count, and must
+  // NOT interleave a "nominal" line during the detection's flicker gaps.
+  it('coalesces a flickering detection into a single updating line', () => {
+    pushPacket({ drone_id: 'DRONE_1', detections: [makeDetection({ confidence: 0.49 })], zone: 'ALPHA' });
+    const { container } = render(<ConnectedIntelPanel />);
+    const before = logLines(container).length; // the single detection line
+
+    // detection drops out for a frame, then returns at a higher/lower confidence
+    // — the classic per-second spam pattern.
+    pushPacket({ drone_id: 'DRONE_1' }); // gap: no detection (nominal)
+    pushPacket({ drone_id: 'DRONE_1', detections: [makeDetection({ confidence: 0.69 })], zone: 'ALPHA' });
+    pushPacket({ drone_id: 'DRONE_1' }); // gap
+    pushPacket({ drone_id: 'DRONE_1', detections: [makeDetection({ confidence: 0.6 })], zone: 'ALPHA' });
+
+    // still exactly one line — no spam, no interleaved "nominal" line
+    expect(logLines(container).length).toBe(before);
+    const active = logLines(container).slice(-1)[0];
+    expect(active.textContent).toMatch(/Person detected.*DRONE_1.*Zone ALPHA/);
+    // grouped: widened confidence range + repeat count
+    expect(active.textContent).toMatch(/49–69% confidence/);
+    expect(active.textContent).toMatch(/×3/);
+  });
+
+  it('gives two simultaneously-detecting drones their own grouped lines', () => {
+    pushPacket({ drone_id: 'DRONE_1', detections: [makeDetection({ confidence: 0.7 })], zone: 'ALPHA' });
+    pushPacket({ drone_id: 'DRONE_2', detections: [makeDetection({ confidence: 0.8 })], zone: 'BRAVO' });
+    const { container } = render(<ConnectedIntelPanel />);
+
+    const lines = logLines(container);
+    expect(lines.length).toBe(2);
+    const text = lines.map((l) => l.textContent).join(' | ');
+    expect(text).toMatch(/DRONE_1.*Zone ALPHA/);
+    expect(text).toMatch(/DRONE_2.*Zone BRAVO/);
   });
 });
