@@ -37,6 +37,9 @@ import type { LngLat } from '../types/telemetry';
 import { useDroneMarkers, type DronePosition } from '../map/droneMarkers';
 import { useMapboxDraw, type MapboxDrawHandle } from '../map/useMapboxDraw';
 import { CoverageHeatmap } from '../map/coverageHeatmap';
+// Type-only (erased) — the nav-sweep view-model the coverage footprint paints,
+// kept separate from the GPS `DronePosition` that drives the markers (B4-5).
+import type { CoveragePosition } from '../store/useSwarmStore';
 
 // ──────────────────────────────────────────────────────────────────────────
 // Runtime configuration bridge
@@ -70,6 +73,8 @@ const DEFAULT_CENTER: LngLat = [0, 0];
 /** Stable empty positions array so the marker/coverage effects don't re-run
  * every render when the parent omits `positions`. */
 const NO_POSITIONS: readonly DronePosition[] = [];
+/** Stable empty coverage array, same rationale, for an omitted `coveragePositions`. */
+const NO_COVERAGE: readonly CoveragePosition[] = [];
 
 /** True only for a finite `[lng, lat]` pair (port of legacy `validLngLatPair`). */
 function isLngLatPair(value: unknown): value is LngLat {
@@ -100,11 +105,17 @@ function resolveAccessToken(explicit?: string): string {
 
 export interface TacticalMapProps {
   /**
-   * Live drone positions from the Module A store (`useDronePositions()`). Drives
-   * the B2 marker cache and the B4 coverage footprint imperatively — never
-   * re-rendering the map for a telemetry tick.
+   * Live drone GPS positions from the Module A store (`useDronePositions()`).
+   * Drives the B2 marker cache imperatively — never re-rendering the map for a
+   * telemetry tick.
    */
   positions?: readonly DronePosition[];
+  /**
+   * Live search-sweep positions (`useCoveragePositions()`, from NavTelemetry).
+   * Drives the B4 coverage footprint — the boustrophedon trail, NOT the GPS
+   * wander (review bug B4-5). Empty until a mission is deployed.
+   */
+  coveragePositions?: readonly CoveragePosition[];
   /**
    * Fired with the open `[lng, lat]` ring whenever the operator finishes/edits a
    * search perimeter (Task B3 → consumed by Module D's DEPLOY SWARM, Task D1),
@@ -116,6 +127,12 @@ export interface TacticalMapProps {
    * so the DEPLOY SWARM controls can drive drawing without owning the map.
    */
   onDrawReady?: (handle: MapboxDrawHandle) => void;
+  /**
+   * Monotonic "new search area" counter (the store's `missionEpoch`). When it
+   * changes, the accumulated coverage footprint is wiped so a new mission does
+   * not paint over the previous one (review bug B4-4). Omit to keep the trail.
+   */
+  coverageEpoch?: number;
   /** Override the initial camera center (`[lng, lat]`). */
   initialCenter?: LngLat;
   /** Override the initial zoom level. */
@@ -136,7 +153,8 @@ export interface TacticalMapProps {
 
 function useCoverageHeatmap(
   map: mapboxgl.Map | null,
-  positions: readonly DronePosition[],
+  positions: readonly CoveragePosition[],
+  clearEpoch?: number,
 ): void {
   const heatmapRef = useRef<CoverageHeatmap | null>(null);
 
@@ -163,6 +181,17 @@ function useCoverageHeatmap(
       else heatmap.breakSegment(p.id);
     }
   }, [map, positions]);
+
+  // [BUG B4-4 fix] Wipe the accumulated footprint when a new search area is
+  // deployed/cleared. The store bumps `missionEpoch` on every `resetCoverage()`;
+  // the initial value is skipped (via the ref seed) so the trail only clears on
+  // an actual change, not on first mount.
+  const lastEpochRef = useRef(clearEpoch);
+  useEffect(() => {
+    if (clearEpoch === undefined || clearEpoch === lastEpochRef.current) return;
+    lastEpochRef.current = clearEpoch;
+    heatmapRef.current?.clear();
+  }, [clearEpoch]);
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -177,8 +206,10 @@ function useCoverageHeatmap(
  */
 export function TacticalMap({
   positions,
+  coveragePositions,
   onPerimeterDrawn,
   onDrawReady,
+  coverageEpoch,
   initialCenter,
   initialZoom = DEFAULT_ZOOM,
   accessToken,
@@ -186,6 +217,12 @@ export function TacticalMap({
 }: TacticalMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [map, setMap] = useState<mapboxgl.Map | null>(null);
+  // True when Mapbox could not be initialised (most commonly: no access token —
+  // `new mapboxgl.Map({ style: 'mapbox://…' })` THROWS, it does not render
+  // blank). We catch that so the failure stays contained to this panel and a
+  // graceful fallback renders, rather than the throw escaping the mount effect
+  // and unmounting the entire dashboard (there is no error boundary above).
+  const [mapError, setMapError] = useState(false);
 
   // BUG B1-3 fix: read `onReady` through a ref so a parent that swaps the
   // handler after first render is still honoured, even though the init effect
@@ -200,7 +237,8 @@ export function TacticalMap({
     if (!token) {
       console.warn(
         'MAPBOX_ACCESS_TOKEN is not configured. Set VITE_MAPBOX_ACCESS_TOKEN ' +
-          '(or window.SIX_EYES_CONFIG.MAPBOX_ACCESS_TOKEN) — the map will render blank.',
+          '(or serve window.SIX_EYES_CONFIG.MAPBOX_ACCESS_TOKEN via the dashboard ' +
+          'server) — the tactical map will show a fallback.',
       );
     }
     mapboxgl.accessToken = token;
@@ -211,16 +249,26 @@ export function TacticalMap({
         ? (window.SIX_EYES_CONFIG!.INITIAL_MAP_CENTER as LngLat)
         : DEFAULT_CENTER;
 
-    const m = new mapboxgl.Map({
-      container: containerRef.current,
-      style: DEFAULT_STYLE,
-      center,
-      zoom: initialZoom,
-      attributionControl: false,
-    });
-    m.addControl(new mapboxgl.NavigationControl({ visualizePitch: false }), 'top-right');
-    m.on('load', () => onReadyRef.current?.(m));
+    let m: mapboxgl.Map;
+    try {
+      m = new mapboxgl.Map({
+        container: containerRef.current,
+        style: DEFAULT_STYLE,
+        center,
+        zoom: initialZoom,
+        attributionControl: false,
+      });
+      m.addControl(new mapboxgl.NavigationControl({ visualizePitch: false }), 'top-right');
+      m.on('load', () => onReadyRef.current?.(m));
+    } catch (err) {
+      // No token / WebGL unavailable / bad style → keep the rest of the
+      // dashboard alive and show the fallback instead of crashing the tree.
+      console.error('[TacticalMap] Mapbox failed to initialise:', err);
+      setMapError(true);
+      return;
+    }
 
+    setMapError(false);
     setMap(m);
 
     return () => {
@@ -233,6 +281,7 @@ export function TacticalMap({
   }, []);
 
   const livePositions = positions ?? NO_POSITIONS;
+  const liveCoverage = coveragePositions ?? NO_COVERAGE;
 
   // B2 — live drone markers (imperative ref-cache; zero re-renders at 20 Hz).
   useDroneMarkers(map, livePositions);
@@ -243,10 +292,28 @@ export function TacticalMap({
     onDrawReady?.(draw);
   }, [draw, onDrawReady]);
 
-  // B4 — accumulating purple search footprint.
-  useCoverageHeatmap(map, livePositions);
+  // B4 — accumulating purple search footprint from the nav sweep (cleared on a
+  // new mission epoch). Fed nav-telemetry positions, NOT the GPS markers (B4-5).
+  useCoverageHeatmap(map, liveCoverage, coverageEpoch);
 
-  return <div ref={containerRef} className="tactical-map" data-testid="tactical-map" />;
+  return (
+    <div
+      ref={containerRef}
+      className={`tactical-map${mapError ? ' tactical-map--error' : ''}`}
+      data-testid="tactical-map"
+    >
+      {mapError && (
+        <div className="tactical-map__fallback" role="alert">
+          <span className="tactical-map__fallback-title">MAP UNAVAILABLE</span>
+          <span className="tactical-map__fallback-hint">
+            No Mapbox access token. Start the dashboard server
+            (<code>python -m src.dashboard_server</code>) or set
+            <code>VITE_MAPBOX_ACCESS_TOKEN</code>.
+          </span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default TacticalMap;
