@@ -135,16 +135,21 @@ export class CoverageHeatmap {
   }
 
   /**
-   * Register the source + layer. Idempotent: a no-op if already present, and
-   * safe to call before the style has loaded — it defers to the `'load'` event.
-   * Re-runnable after a `setStyle()` (which drops custom sources/layers).
+   * Register the source + layer. Idempotent (a no-op if already present, via the
+   * `getSource` guard in `registerSourceAndLayer`) and safe to call before the
+   * style has loaded — it defers to the one-shot `'load'` event.
+   *
+   * NOTE: this does NOT survive a `map.setStyle()`. `setStyle` drops custom
+   * sources/layers and does NOT re-fire `'load'` (that fires once per map), so
+   * the trail would silently vanish after a style swap. The SIX-EYES map uses a
+   * single fixed style (`dark-v11`) and never calls `setStyle`, so this is not
+   * exercised; a caller that adds style switching must re-`attach()` afterwards
+   * (e.g. on `'style.load'`).
    */
   attach(): void {
     if (this.map.isStyleLoaded()) {
       this.registerSourceAndLayer();
     } else {
-      // `once` would drop a re-register after setStyle; `on` + the getSource
-      // guard below keeps it idempotent across multiple style loads.
       this.map.on('load', this.onLoad);
     }
   }
