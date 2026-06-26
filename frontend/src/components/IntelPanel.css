@@ -123,8 +123,10 @@
 }
 .intel-line-time {
   flex-shrink: 0;
-  font-size: 9.5px;
-  color: var(--text-dim);
+  font-size: 10.5px;
+  /* Brighter than --text-dim so the timestamp clears WCAG AA on the dark
+   * panel instead of fading into it (issue #4 — readability/contrast). */
+  color: var(--text-secondary);
   letter-spacing: 0.04em;
   min-width: 64px;
 }
@@ -139,9 +141,15 @@
   color: var(--red);
   font-weight: 600;
 }
-/* Dim older lines so the newest (active) line reads as the headline. */
+/* Keep the newest (active) line as the headline, but only lightly dim older
+ * lines — the legacy 0.55 washed historical text down to ~4:1 and made the
+ * rapid-fire log a strain to read (issue #4). 0.82 preserves the hierarchy cue
+ * while every line stays comfortably legible. */
 .intel-line:not(:last-child) {
-  opacity: 0.55;
+  opacity: 0.82;
+}
+.intel-line:last-child {
+  font-weight: 500;
 }
 
 /* ── "% SEARCHED" system metric ── */
