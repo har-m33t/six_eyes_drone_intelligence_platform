@@ -7,12 +7,22 @@ Run with:
     python -m src.dashboard_server
 """
 import json
+import sys
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
 
-from . import config
+try:
+    from . import config
+except ImportError:
+    # Support BOTH `python -m src.dashboard_server` (documented) and the natural
+    # `python src/dashboard_server.py` (direct execution). Without the package
+    # context the relative import has no parent, so add the project root to the
+    # path and import absolutely. The Mapbox token is still sourced from `.env`
+    # via `config` — never hardcoded here.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from src import config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -80,9 +90,24 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
         self.wfile.write(FAVICON_SVG)
 
 
-def main():
+def build_server() -> ThreadingHTTPServer:
+    """Construct (and bind) the dashboard HTTP server. Separated from `main` so
+    tests can exercise construction without entering the blocking serve loop."""
     handler = partial(DashboardRequestHandler, directory=str(PROJECT_ROOT))
-    server = ThreadingHTTPServer((config.DASHBOARD_HOST, config.DASHBOARD_PORT), handler)
+    return ThreadingHTTPServer((config.DASHBOARD_HOST, config.DASHBOARD_PORT), handler)
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+
+    if "--check" in argv:
+        # Smoke check used by the test-suite to prove the module imports and its
+        # config resolves under BOTH launch styles (no port bind, no serve loop).
+        runtime_config_js()
+        print("[dashboard] --check OK (imports + config resolved)")
+        return
+
+    server = build_server()
     url = f"http://{config.DASHBOARD_HOST}:{config.DASHBOARD_PORT}/"
     print(f"[dashboard] Serving SIX-EYES dashboard at {url}")
     if not config.MAPBOX_ACCESS_TOKEN:
