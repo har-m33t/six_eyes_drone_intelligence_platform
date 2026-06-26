@@ -1,0 +1,96 @@
+/* App-level composition chrome: header badges + fleet-status sidebar.
+   Uses only theme.css tokens — no new colours / dimension drift. */
+
+/* ── Header: connection status ── */
+.conn-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-primary);
+}
+.conn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 6px currentColor;
+}
+
+/* ── Header: mission clock ── */
+.mission-clock {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--text-primary);
+}
+
+/* ── Fleet-status sidebar ── */
+.fleet {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+}
+
+.fleet-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+.fleet-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  background: var(--bg-panel-raised);
+}
+.fleet-stat-val {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.fleet-stat-lbl {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+}
+
+.fleet-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+}
+.fleet-row {
+  display: grid;
+  grid-template-columns: 32px 1fr auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--bg-panel-raised);
+  font-size: 11px;
+}
+.fleet-row-id {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.fleet-row-zone {
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+}
+.fleet-row-status {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+.fleet-row-sig {
+  color: var(--text-dim);
+  min-width: 52px;
+  text-align: right;
+}
+.fleet-row-batt {
+  color: var(--text-primary);
+  min-width: 40px;
+  text-align: right;
+}
