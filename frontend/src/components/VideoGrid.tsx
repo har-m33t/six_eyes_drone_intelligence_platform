@@ -11,7 +11,7 @@
  */
 
 import type { Detection, DroneId, SignalState } from '../types/telemetry';
-import { DRONE_IDS, ZONES } from '../constants/drones';
+import { DRONE_IDS, DRONE_VIDEO_SOURCES, ZONES } from '../constants/drones';
 import { VideoFeed, deriveFeedStatus } from './VideoFeed';
 import './VideoGrid.css';
 
@@ -36,6 +36,7 @@ export function VideoGrid({ feeds }: VideoGridProps) {
       {DRONE_IDS.map((id) => {
         const data = feeds?.[id];
         const status = deriveFeedStatus(data?.signal, Boolean(data?.frame));
+        const clip = DRONE_VIDEO_SOURCES[id];
         return (
           <VideoFeed
             key={id}
@@ -44,6 +45,8 @@ export function VideoGrid({ feeds }: VideoGridProps) {
             status={status}
             frame={data?.frame}
             detections={data?.detections}
+            videoSrc={clip?.src}
+            videoStartOffsetS={clip?.startOffsetS}
           />
         );
       })}
