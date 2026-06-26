@@ -214,6 +214,12 @@ def reset_navigators():
 # foundry_client and .claude/foundary-task.md.
 TELEMETRY_WRITE_INTERVAL_S = 5.0
 
+# A healthy clip yields at most ONE failed read per loop (the EOF that triggers a
+# rewind to frame 0). If reads keep failing past this many in a row even after a
+# rewind, the file is unreadable (missing codec, truncated, zero frames) — bail
+# with a terminal SIGNAL LOST instead of spinning the loop at 100% CPU forever.
+MAX_CONSECUTIVE_READ_FAILURES = 30
+
 
 def encode_frame_b64(frame, width=None, quality=None):
     """Downscale and JPEG-encode a frame to a base64 string for packet.frame_b64.
@@ -309,13 +315,31 @@ def _remember_gps(drone_id, gps):
 
 
 def drone_producer(drone_id, video_path, sender, start_offset=0):
+    # Open + validate the capture BEFORE loading the (heavy, shared) YOLO model so
+    # a feed whose video can't open fails fast and cheap. cv2.VideoCapture never
+    # raises on a bad path — it returns a not-opened capture — so this guard is the
+    # only thing standing between a missing/corrupt clip and a silently blank tile.
+    resolved_path = config.resolve_video_path(video_path)
+    cap = cv2.VideoCapture(resolved_path)
+    if not cap.isOpened():
+        cap.release()
+        print(
+            f"[{drone_id}] could not open video {resolved_path!r} -- "
+            "emitting SIGNAL LOST so the tile shows OFFLINE instead of blank."
+        )
+        # No frame ever decoded → the dashboard derives OFFLINE from the LOST
+        # signal and shows the SIGNAL LOST overlay, a diagnosable state rather
+        # than an empty feed with no explanation.
+        sender.send(_build_signal_lost_packet(drone_id, 0, None))
+        return
+
     model = load_model()
-    cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     frame_delay = 1.0 / fps
     frame_idx = 0
     last_frame_b64 = None
     last_write = 0.0  # last Foundry telemetry write time for this drone
+    read_failures = 0  # consecutive failed reads (EOF rewind resets it on success)
 
     if start_offset > 0:
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_offset)
@@ -327,8 +351,19 @@ def drone_producer(drone_id, video_path, sender, start_offset=0):
         t_start = time.time()
         ret, frame = cap.read()
         if not ret:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # loop video
+            read_failures += 1
+            if read_failures >= MAX_CONSECUTIVE_READ_FAILURES:
+                # Rewinding never recovered a frame — the clip is unreadable. Stop
+                # rather than spin forever; the terminal SIGNAL LOST below fires.
+                print(
+                    f"[{drone_id}] no frame after {read_failures} attempts on "
+                    f"{resolved_path!r} -- stopping feed (SIGNAL LOST)."
+                )
+                break
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # loop video (normal EOF path)
+            time.sleep(0.01)  # never busy-spin while reads are failing
             continue
+        read_failures = 0  # a good frame clears the failure streak
 
         # Detect on a frame stride, not every frame: six CPU YOLO streams can't
         # infer every frame in real time (review finding #8). Video still streams
