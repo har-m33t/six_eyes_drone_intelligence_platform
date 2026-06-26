@@ -28,6 +28,10 @@
   /* Text — slight purple tint, not pure white */
   --text-primary: #e4ddf7;
   --text-dim: #756f8c;
+  /* Brighter than --text-dim for secondary text that must stay legible on the
+   * dark panels (e.g. log timestamps): ~6.6:1 on --bg-panel-raised, clears
+   * WCAG AA where --text-dim (3.9:1) does not. */
+  --text-secondary: #9d96b8;
   --mono: 'JetBrains Mono', 'Courier New', monospace;
 }
 
