@@ -125,6 +125,10 @@ export class WebSocketService {
 
     try {
       this.socket = new WebSocket(this.url);
+      // Python's `websockets` server normally sends text frames, but keeping the
+      // browser in ArrayBuffer mode lets us decode any binary JSON frame instead
+      // of silently dropping it before the video packet reaches the store.
+      this.socket.binaryType = 'arraybuffer';
     } catch (err) {
       // The constructor throws on a malformed URL — treat like any drop so the
       // backoff loop keeps trying rather than wedging the dashboard.
@@ -217,9 +221,25 @@ export class WebSocketService {
   };
 
   private handleMessage = (event: MessageEvent): void => {
+    const data = event.data;
+    if (typeof data === 'string') {
+      this.ingestRawMessage(data);
+      return;
+    }
+
+    void this.decodeMessageData(data)
+      .then((raw) => {
+        if (raw !== null) this.ingestRawMessage(raw);
+      })
+      .catch((err) => {
+        console.warn('[WS] Ignoring unreadable server message.', err);
+      });
+  };
+
+  private ingestRawMessage(raw: string): void {
     let packet: InboundPacket;
     try {
-      packet = JSON.parse(event.data as string) as InboundPacket;
+      packet = JSON.parse(raw) as InboundPacket;
     } catch {
       console.warn('[WS] Ignoring non-JSON server message.');
       return;
@@ -233,7 +253,22 @@ export class WebSocketService {
     } catch (err) {
       console.error('[WS] Store rejected packet:', err);
     }
-  };
+  }
+
+  private async decodeMessageData(data: unknown): Promise<string | null> {
+    if (isArrayBufferLike(data) || ArrayBuffer.isView(data)) {
+      return new TextDecoder().decode(data);
+    }
+    if (isBlobLike(data)) {
+      if (typeof data.text === 'function') return data.text();
+      if (typeof data.arrayBuffer === 'function') {
+        return new TextDecoder().decode(await data.arrayBuffer());
+      }
+      return readBlobAsText(data);
+    }
+    console.warn('[WS] Ignoring unsupported server message type.');
+    return null;
+  }
 
   // ── Reconnection (exponential backoff + jitter) ─────────────────────────────
 
@@ -307,6 +342,33 @@ export class WebSocketService {
       console.error('[WS] Store rejected connection status:', err);
     }
   }
+}
+
+function isArrayBufferLike(data: unknown): data is ArrayBuffer {
+  return Object.prototype.toString.call(data) === '[object ArrayBuffer]';
+}
+
+type BlobLike = Blob & {
+  text?: () => Promise<string>;
+  arrayBuffer?: () => Promise<ArrayBuffer>;
+};
+
+function isBlobLike(data: unknown): data is BlobLike {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    typeof (data as { size?: unknown }).size === 'number' &&
+    typeof (data as { type?: unknown }).type === 'string'
+  );
+}
+
+function readBlobAsText(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.readAsText(blob);
+  });
 }
 
 /**
