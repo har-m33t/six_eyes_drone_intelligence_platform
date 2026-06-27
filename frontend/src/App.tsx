@@ -98,7 +98,7 @@ function buildFeeds(
     if (!pkt) continue;
     feeds[id] = {
       signal: pkt.health?.signal,
-      frame: pkt.frame_b64,
+      frame: typeof pkt.frame_b64 === 'string' ? pkt.frame_b64 : null,
       detections: pkt.detections,
     };
   }
