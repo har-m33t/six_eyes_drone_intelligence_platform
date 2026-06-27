@@ -12,7 +12,7 @@
 
 import type { Detection, DroneId, SignalState } from '../types/telemetry';
 import { DRONE_IDS, DRONE_VIDEO_SOURCES, ZONES } from '../constants/drones';
-import { VideoFeed, deriveFeedStatus } from './VideoFeed';
+import { VideoFeed, deriveFeedStatus, hasRenderableFrame } from './VideoFeed';
 import './VideoGrid.css';
 
 /** Per-drone view data the grid needs to render one feed tile. */
@@ -35,7 +35,7 @@ export function VideoGrid({ feeds }: VideoGridProps) {
     <div className="video-grid">
       {DRONE_IDS.map((id) => {
         const data = feeds?.[id];
-        const status = deriveFeedStatus(data?.signal, Boolean(data?.frame));
+        const status = deriveFeedStatus(data?.signal, hasRenderableFrame(data?.frame));
         const clip = DRONE_VIDEO_SOURCES[id];
         return (
           <VideoFeed
@@ -60,6 +60,6 @@ export function VideoGrid({ feeds }: VideoGridProps) {
 export function countOnlineFeeds(feeds?: Partial<Record<DroneId, DroneFeedData>>): number {
   return DRONE_IDS.reduce((n, id) => {
     const data = feeds?.[id];
-    return deriveFeedStatus(data?.signal, Boolean(data?.frame)) === 'LIVE' ? n + 1 : n;
+    return deriveFeedStatus(data?.signal, hasRenderableFrame(data?.frame)) === 'LIVE' ? n + 1 : n;
   }, 0);
 }
