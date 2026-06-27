@@ -82,13 +82,18 @@ export default function DashboardShell({
 }: DashboardShellProps) {
   return (
     <div className="shell-root">
-      <header className="shell-header">
+      {/* Single top banner — the swarm control panel. Brand, connection status,
+          the DRAW AREA · CLEAR · DEPLOY SWARM command group, and the mission
+          clock all live in ONE prominent bar at the very top (merged from the
+          old two-row brand-header + command-bar split), so the control panel is
+          front-and-centre rather than tucked into a secondary row. */}
+      <header className="shell-banner">
         <div className="shell-logo">
           SIX&#8209;EYES <span>// DRONE FLEET INTELLIGENCE</span>
         </div>
 
-        {/* Connection status — left group, immediately after the logo. */}
-        <div className="shell-header-slot">
+        {/* Connection status — immediately right of the brand. */}
+        <div className="shell-banner-conn">
           {connectionStatus ?? (
             <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
               CONNECTING&hellip;
@@ -96,8 +101,22 @@ export default function DashboardShell({
           )}
         </div>
 
+        {/* Control panel — the swarm command center. `margin-left:auto` (in CSS)
+            pushes this group and the clock to the right side of the banner; the
+            raised, bordered frame makes it read as a distinct control panel. */}
+        <div className="shell-control-panel">
+          <span className="shell-control-panel-label">SWARM CONTROL</span>
+          <div className="shell-control-panel-slot">
+            {deployControls ?? (
+              <span style={{ fontSize: 9.5, color: 'var(--text-dim)' }}>
+                DEPLOY CONTROLS
+              </span>
+            )}
+          </div>
+        </div>
+
         {/* Mission clock — far right. */}
-        <div className="shell-header-slot right">
+        <div className="shell-banner-clock">
           {missionClock ?? (
             <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
               MISSION T+ 00:00:00
@@ -105,21 +124,6 @@ export default function DashboardShell({
           )}
         </div>
       </header>
-
-      {/* Command bar — a dedicated full-width row that always holds the swarm
-          command controls (DRAW AREA · CLEAR · DEPLOY SWARM). Lifted out of the
-          cramped brand header so the buttons get their own space and can never
-          be crowded off-screen (ui-fixes #3 — missing action controls). */}
-      <div className="shell-commandbar">
-        <span className="shell-commandbar-label">COMMAND // SWARM CONTROL</span>
-        <div className="shell-commandbar-slot">
-          {deployControls ?? (
-            <span style={{ fontSize: 9.5, color: 'var(--text-dim)' }}>
-              DEPLOY CONTROLS
-            </span>
-          )}
-        </div>
-      </div>
 
       <main className="shell-grid">
         {/* Column 1 — live video feeds. */}
