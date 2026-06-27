@@ -8,6 +8,7 @@
  * delayed onclose can no longer orphan a newer socket.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { waitFor } from '@testing-library/dom';
 import { WebSocketService } from './websocket';
 import { useSwarmStore } from '../store/useSwarmStore';
 
@@ -24,7 +25,7 @@ class MockWebSocket {
   onopen: (() => void) | null = null;
   onclose: ((e: { code: number }) => void) | null = null;
   onerror: (() => void) | null = null;
-  onmessage: ((e: { data: string }) => void) | null = null;
+  onmessage: ((e: { data: unknown }) => void) | null = null;
   sent: string[] = [];
   closeCalls = 0;
 
@@ -44,7 +45,7 @@ class MockWebSocket {
     this.readyState = MockWebSocket.OPEN;
     this.onopen?.();
   }
-  drvMessage(data: string) {
+  drvMessage(data: unknown) {
     this.onmessage?.({ data });
   }
   drvClose(code = 1006) {
@@ -134,6 +135,46 @@ describe('inbound message handling', () => {
     svc.connect();
     last().drvOpen();
     expect(() => last().drvMessage('<<not json>>')).not.toThrow();
+  });
+
+  it('routes an ArrayBuffer JSON drone frame with frame_b64 into the store', async () => {
+    const svc = new WebSocketService({ url: 'ws://x' });
+    svc.connect();
+    last().drvOpen();
+    const raw = JSON.stringify({
+      drone_id: 'DRONE_3',
+      timestamp: 1,
+      frame_idx: 12,
+      detections: [],
+      gps: { lat: 1, lng: 2, lon: 2, alt: 0 },
+      health: { battery: 90, signal: 'STRONG', status: 'ONLINE', speed_ms: 0, temp_c: 30 },
+      mission: { zone: 'CHARLIE', coverage_pct: 0, elapsed_s: 0 },
+      frame_b64: 'QUJD',
+    });
+    last().drvMessage(new TextEncoder().encode(raw).buffer);
+    await waitFor(() => {
+      expect(useSwarmStore.getState().drones.DRONE_3?.frame_b64).toBe('QUJD');
+    });
+  });
+
+  it('routes a Blob JSON drone frame with frame_b64 into the store', async () => {
+    const svc = new WebSocketService({ url: 'ws://x' });
+    svc.connect();
+    last().drvOpen();
+    const raw = JSON.stringify({
+      drone_id: 'DRONE_4',
+      timestamp: 1,
+      frame_idx: 13,
+      detections: [],
+      gps: { lat: 1, lng: 2, lon: 2, alt: 0 },
+      health: { battery: 90, signal: 'STRONG', status: 'ONLINE', speed_ms: 0, temp_c: 30 },
+      mission: { zone: 'DELTA', coverage_pct: 0, elapsed_s: 0 },
+      frame_b64: 'REVG',
+    });
+    last().drvMessage(new Blob([raw], { type: 'application/json' }));
+    await waitFor(() => {
+      expect(useSwarmStore.getState().drones.DRONE_4?.frame_b64).toBe('REVG');
+    });
   });
 
   // A malformed-but-JSON frame makes the store's ingest throw; the service must
