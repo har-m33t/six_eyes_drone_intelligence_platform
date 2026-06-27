@@ -159,8 +159,16 @@
 
 /* Panel body — the slot region a downstream module fills. flex:1 so it
    consumes the panel below its header, matching the legacy `.video-grid`,
-   `.map-wrap`, `.health-list` flex behaviour. */
+   `.map-wrap`, `.health-list` flex behaviour.
+
+   `position: relative` makes this the containing block for absolutely-positioned
+   slot content. The TacticalMap fills its panel with `position: absolute;
+   inset: 0` (ported from the legacy `#map`), and the legacy `.map-wrap` was
+   `position: relative` to contain it. Without this, the absolute map resolves
+   against the viewport and paints over the ENTIRE dashboard (banner + feeds),
+   which reads as "nothing rendered". */
 .shell-panel-body {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
