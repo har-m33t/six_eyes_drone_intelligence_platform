@@ -12,11 +12,9 @@
  */
 
 /* ── Root column ── */
-/* The shell stacks three fixed-purpose rows then a flexing body: the brand
-   header, the command bar, and the tactical grid. A flex column (rather than the
-   old `height: calc(100vh - 48px)` magic number on the grid) means each bar can
-   own its natural height and the grid simply takes the rest — adding the command
-   bar can't push anything off-screen. */
+/* The shell stacks the top banner then a flexing body. A flex column (rather
+   than the old `height: calc(100vh - 48px)` magic number on the grid) means the
+   banner owns its natural height and the grid simply takes the rest. */
 .shell-root {
   display: flex;
   flex-direction: column;
@@ -24,19 +22,23 @@
   overflow: hidden;
 }
 
-/* ── Header ── */
-.shell-header {
-  height: 48px;
+/* ── Top banner (single row) ── */
+/* ONE prominent bar at the very top that merges the brand, connection status,
+   the swarm control panel (DRAW · CLEAR · DEPLOY), and the mission clock. It
+   replaces the old two-row brand-header + command-bar split so the control
+   panel sits front-and-centre at the top of the dashboard. */
+.shell-banner {
+  height: 60px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
   padding: 0 20px;
   background: var(--bg-panel);
-  gap: 24px;
-  /* The header is a single non-wrapping row. Clip rather than let any item
-     spill past the bar — combined with the flex rules below, the only thing
-     that ever shrinks here is the branding logo. */
+  gap: 18px;
+  /* Single non-wrapping row. Clip rather than let any item spill past the bar —
+     combined with the flex rules below, the only thing that ever shrinks is the
+     branding logo (the control panel + clock stay fully on-screen). */
   overflow: hidden;
 }
 
@@ -47,9 +49,8 @@
   color: var(--accent);
   text-shadow: 0 0 8px var(--accent-glow);
   /* The logo yields space first: on a narrow / display-scaled viewport it
-     truncates with an ellipsis so the deploy controls and mission clock to its
-     right stay fully on-screen instead of being pushed off the right edge
-     (ui-fixes #3 — missing action controls). */
+     truncates with an ellipsis so the control panel and mission clock to its
+     right stay fully on-screen instead of being pushed off the right edge. */
   flex: 0 1 auto;
   min-width: 0;
   white-space: nowrap;
@@ -61,53 +62,53 @@
   font-weight: 400;
 }
 
-/* Header slot wrappers — keep the legacy spacing so plugged-in controls
-   (conn status, deploy buttons, mission clock) land in the right place.
-   The first auto-margin pushes everything after the logo to the right edge,
-   mirroring the legacy `.deploy-controls { margin-left: auto }`. */
-.shell-header-slot {
+/* Connection status — sits just right of the brand, never shrinks. */
+.shell-banner-conn {
   display: flex;
   align-items: center;
-  gap: 10px;
-  /* Status badge / mission clock keep their full width — they must never be the
-     items that get clipped when the row is tight (ui-fixes #3). */
-  flex-shrink: 0;
-}
-.shell-header-slot.right {
-  margin-left: auto;
-  /* Mission clock stays pinned to the right and never shrinks. */
   flex-shrink: 0;
 }
 
-/* ── Command bar ── */
-/* A dedicated full-width row that owns the swarm command controls. Because it is
-   its own row (not competing with the logo/clock for header space), the DRAW
-   AREA · CLEAR · DEPLOY SWARM buttons are always fully visible (ui-fixes #3). */
-.shell-commandbar {
-  height: 46px;
-  flex-shrink: 0;
+/* ── Control panel (the swarm command center) ── */
+/* Visually-grouped cluster holding the DRAW · CLEAR · DEPLOY controls. The
+   `margin-left:auto` pushes it (and the clock after it) to the right side of the
+   banner; a raised background + border make it read as a distinct control panel
+   rather than loose buttons, and `min-width:0` lets the inner status hint
+   truncate before any command button is clipped. */
+.shell-control-panel {
+  margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 0 20px;
+  gap: 12px;
+  flex-shrink: 0;
+  min-width: 0;
+  height: 40px;
+  padding: 0 14px;
   background: var(--bg-panel-raised);
-  border-bottom: 1px solid var(--line);
+  border: 1px solid var(--line-bright);
+  border-radius: 2px;
 }
-.shell-commandbar-label {
-  font-size: 10px;
-  letter-spacing: 0.14em;
+.shell-control-panel-label {
+  font-size: 9px;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--text-dim);
+  color: var(--accent-dim);
   white-space: nowrap;
   flex-shrink: 0;
+  padding-right: 12px;
+  border-right: 1px solid var(--line);
 }
-/* Controls group sits at the right edge; min-width:0 lets the inner status hint
-   truncate before any button is ever clipped. */
-.shell-commandbar-slot {
+.shell-control-panel-slot {
   display: flex;
   align-items: center;
-  margin-left: auto;
   min-width: 0;
+}
+
+/* Mission clock — far right, never shrinks. */
+.shell-banner-clock {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 /* ── Layout grid ── */
