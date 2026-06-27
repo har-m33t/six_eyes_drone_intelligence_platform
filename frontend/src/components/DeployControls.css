@@ -8,8 +8,8 @@
  *
  * Note: in the legacy single-file dashboard `.deploy-controls` carried
  * `margin-left:auto` to push the group right within the header flex row. Here
- * the DashboardShell wrapper (`.shell-header-slot.right`) already owns that
- * right-alignment, so this group fills its slot without re-declaring the
+ * the DashboardShell control-panel wrapper (`.shell-control-panel`) already owns
+ * that right-alignment, so this group fills its slot without re-declaring the
  * margin — kept as a no-op comment to flag the intentional difference.
  */
 
