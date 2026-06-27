@@ -37,6 +37,25 @@ export function deriveFeedStatus(
   return hasFrame ? 'LIVE' : 'NO_SIGNAL';
 }
 
+const DATA_IMAGE_B64_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
+
+/** True only for a non-empty frame string that can produce an <img> src. */
+export function hasRenderableFrame(frame: string | null | undefined): frame is string {
+  return typeof frame === 'string' && frame.trim().length > 0;
+}
+
+/**
+ * The Python backend sends bare base64 in `packet.frame_b64`, and the legacy
+ * dashboard rendered it as `data:image/jpeg;base64,${frame_b64}`. Accept an
+ * already-prefixed data URL too so the React tile does not double-prefix frames
+ * from tests or alternate producers.
+ */
+export function frameToImageSrc(frame: string | null | undefined): string | null {
+  if (!hasRenderableFrame(frame)) return null;
+  const value = frame.trim();
+  return DATA_IMAGE_B64_RE.test(value) ? value : `data:image/jpeg;base64,${value}`;
+}
+
 export interface VideoFeedProps {
   droneId: DroneId;
   zone: Zone;
@@ -77,7 +96,8 @@ export function VideoFeed({
   const [frameSize, setFrameSize] = useState<FrameSize | null>(null);
 
   const isOffline = status === 'OFFLINE';
-  const hasFrame = Boolean(frame);
+  const imageSrc = frameToImageSrc(frame);
+  const hasFrame = imageSrc !== null;
   // Keep the (now frozen, greyscale) last frame visible while OFFLINE; only the
   // never-saw-a-frame NO_SIGNAL state shows the placeholder.
   const showImage = hasFrame && status !== 'NO_SIGNAL';
@@ -124,7 +144,7 @@ export function VideoFeed({
 
       {showImage && (
         <img
-          src={`data:image/jpeg;base64,${frame}`}
+          src={imageSrc}
           alt={`${droneId} live feed`}
           onLoad={(e) => {
             const img = e.currentTarget;
