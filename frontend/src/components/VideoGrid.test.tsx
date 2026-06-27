@@ -9,7 +9,12 @@ import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 
 import { VideoGrid, countOnlineFeeds, type DroneFeedData } from './VideoGrid';
-import { VideoFeed, deriveFeedStatus } from './VideoFeed';
+import {
+  VideoFeed,
+  deriveFeedStatus,
+  frameToImageSrc,
+  hasRenderableFrame,
+} from './VideoFeed';
 import { DRONE_IDS, DRONE_VIDEO_SOURCES, ZONES } from '../constants/drones';
 import type { DroneId } from '../types/telemetry';
 import { makeDetection, FAKE_FRAME_B64 } from '../test/factories';
@@ -33,6 +38,23 @@ describe('deriveFeedStatus', () => {
   });
 });
 
+describe('frame normalization', () => {
+  it('matches the legacy dashboard by prefixing bare backend frame_b64', () => {
+    expect(frameToImageSrc(FAKE_FRAME_B64)).toBe(`data:image/jpeg;base64,${FAKE_FRAME_B64}`);
+  });
+
+  it('accepts already-prefixed data URLs without double-prefixing', () => {
+    const url = `data:image/png;base64,${FAKE_FRAME_B64}`;
+    expect(frameToImageSrc(url)).toBe(url);
+  });
+
+  it('does not treat empty or whitespace-only frame strings as renderable', () => {
+    expect(hasRenderableFrame('')).toBe(false);
+    expect(hasRenderableFrame('   ')).toBe(false);
+    expect(frameToImageSrc('   ')).toBeNull();
+  });
+});
+
 // ── countOnlineFeeds ───────────────────────────────────────────────────────
 describe('countOnlineFeeds', () => {
   it('is 0 for undefined / empty feeds', () => {
@@ -48,6 +70,13 @@ describe('countOnlineFeeds', () => {
       DRONE_4: { signal: 'STRONG' }, //                        NO_SIGNAL (no frame)
     };
     expect(countOnlineFeeds(feeds)).toBe(2);
+  });
+
+  it('does not count a whitespace-only frame as LIVE', () => {
+    const feeds: Partial<Record<DroneId, DroneFeedData>> = {
+      DRONE_1: { signal: 'STRONG', frame: '   ' },
+    };
+    expect(countOnlineFeeds(feeds)).toBe(0);
   });
 
   it('never exceeds six even if extra ids are present', () => {
