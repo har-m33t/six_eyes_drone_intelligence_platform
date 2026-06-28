@@ -31,8 +31,7 @@
   align-items: center;
   justify-content: center;
 }
-.feed img,
-.feed-video {
+.feed img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -126,39 +125,10 @@
   animation: feed-pulse 1.4s infinite;
 }
 
-/* "REPLAY" tag — marks a tile that is showing the pre-recorded clip (no live
-   link yet) so looped footage is never mistaken for a live feed. Top-right,
-   clear of the bottom-left PERSON DETECTED pill and the top-left drone chip. */
-.feed-replay-badge {
-  position: absolute;
-  top: 4px;
-  right: 6px;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 7px;
-  border-radius: 10px;
-  font-size: 8.5px;
-  letter-spacing: 0.1em;
-  background: rgba(0, 0, 0, 0.6);
-  color: var(--text-dim, #756f8c);
-  pointer-events: none;
-}
-.feed-replay-badge .rec-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--red, #ff5c5c);
-  box-shadow: 0 0 5px var(--red, #ff5c5c);
-  animation: feed-pulse 1.6s infinite;
-}
-
 /* ── SIGNAL LOST / OFFLINE terminal state ── */
-/* Freeze the last frame in greyscale ("black/static") behind a red warning. The
-   greyscale is scoped to the <img>/<video> so the emergency text stays red. */
-.feed.offline img,
-.feed.offline .feed-video {
+/* Freeze the last streamed frame in greyscale ("black/static") behind a red
+   warning. The greyscale is scoped to the <img> so the emergency text stays red. */
+.feed.offline img {
   filter: grayscale(1) brightness(0.55);
 }
 /* Emergency warning is a real DOM element (`role="alert"`), NOT a CSS ::after
