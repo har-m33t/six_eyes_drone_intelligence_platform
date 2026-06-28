@@ -39,27 +39,3 @@ export const ZONES: Record<CanonicalDroneId, Zone> = {
 export function shortDroneLabel(id: DroneId): string {
   return id.replace('DRONE_', 'D');
 }
-
-/** A drone's pre-recorded feed clip, played directly in the browser as the video
- *  tile's base layer (live WebSocket frames override it when the backend is up). */
-export interface DroneVideoSource {
-  /** URL served by Vite's footage middleware (see `vite.config.ts`). */
-  src: string;
-  /** Seconds to seek to on first play, so drones sharing a clip look independent
-   *  (mirrors the backend's `START_OFFSETS`). Clamped to the clip length at runtime. */
-  startOffsetS: number;
-}
-
-/**
- * Drone → footage-clip map, mirroring `src/config.py` `VIDEO_PATHS` (three clips
- * reused across six drones) and `START_OFFSETS` (per-drone desync). Paths resolve
- * against the repo-root `footage/` dir via the dev/preview server middleware.
- */
-export const DRONE_VIDEO_SOURCES: Record<CanonicalDroneId, DroneVideoSource> = {
-  DRONE_1: { src: '/footage/drone_1.mp4', startOffsetS: 0 },
-  DRONE_2: { src: '/footage/drone_2.mp4', startOffsetS: 2 },
-  DRONE_3: { src: '/footage/drone_1.mp4', startOffsetS: 8 }, // reuse, desynced from D1
-  DRONE_4: { src: '/footage/drone_2.mp4', startOffsetS: 4 }, // reuse, desynced from D2/D6
-  DRONE_5: { src: '/footage/drone_3.mp4', startOffsetS: 9 },
-  DRONE_6: { src: '/footage/drone_2.mp4', startOffsetS: 7 }, // reuse, desynced from D2/D4
-};
