@@ -3,15 +3,17 @@
  * ------------------------------------------------------------
  * Pure layout component (Interface Contract: "Pure layout grid component").
  * Always renders EXACTLY six feeds in the fixed `DRONE_IDS` order, merging in
- * whatever per-drone data the parent supplies; drones with no data yet render as
- * NO_SIGNAL placeholders, matching the legacy "scaffold all six up front" build.
+ * whatever per-drone data the parent supplies; drones with no live frame yet
+ * render as NO_SIGNAL placeholders, matching the legacy "scaffold all six up
+ * front" build. Video is streamed from the backend producer (`packet.frame_b64`)
+ * — the grid never plays the source MP4s directly in the browser.
  *
  * It owns no store/network wiring — Module A/D pass `feeds` down. Per-feed render
  * state is derived locally via `deriveFeedStatus(signal, hasFrame)`.
  */
 
 import type { Detection, DroneId, SignalState } from '../types/telemetry';
-import { DRONE_IDS, DRONE_VIDEO_SOURCES, ZONES } from '../constants/drones';
+import { DRONE_IDS, ZONES } from '../constants/drones';
 import { VideoFeed, deriveFeedStatus, hasRenderableFrame } from './VideoFeed';
 import './VideoGrid.css';
 
@@ -36,7 +38,6 @@ export function VideoGrid({ feeds }: VideoGridProps) {
       {DRONE_IDS.map((id) => {
         const data = feeds?.[id];
         const status = deriveFeedStatus(data?.signal, hasRenderableFrame(data?.frame));
-        const clip = DRONE_VIDEO_SOURCES[id];
         return (
           <VideoFeed
             key={id}
@@ -45,8 +46,6 @@ export function VideoGrid({ feeds }: VideoGridProps) {
             status={status}
             frame={data?.frame}
             detections={data?.detections}
-            videoSrc={clip?.src}
-            videoStartOffsetS={clip?.startOffsetS}
           />
         );
       })}
