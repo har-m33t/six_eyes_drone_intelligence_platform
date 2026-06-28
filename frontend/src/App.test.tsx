@@ -81,11 +81,11 @@ describe('App — LIVE FEEDS count reflects streaming video, not health', () => 
     // live feed.
     expect(screen.getByText('0/6 ONLINE')).toBeInTheDocument();
     expect(screen.queryByText('6/6 ONLINE')).toBeNull();
-    // …yet the grid is NOT blank: every tile falls back to looping its recorded
-    // clip (tagged REPLAY), so the operator always sees footage.
-    expect(container.querySelectorAll('video')).toHaveLength(6);
-    expect(container.querySelectorAll('.feed-placeholder')).toHaveLength(0);
-    expect(screen.getAllByText('REPLAY')).toHaveLength(6);
+    // Video is backend-streamed only: with no frames flowing, every tile shows
+    // the NO SIGNAL placeholder rather than looping a local MP4, so the grid
+    // honestly reflects that no live feed is arriving from the producer.
+    expect(container.querySelectorAll('video')).toHaveLength(0);
+    expect(container.querySelectorAll('.feed-placeholder')).toHaveLength(6);
   });
 
   it('reports 6/6 once every feed is actually streaming a frame', () => {
