@@ -49,8 +49,14 @@ export const COVERAGE_BLUR = 0.4;
  * Spacing (in degrees) between interpolated footprints along a drone's path.
  * Telemetry packets arrive faster than the drone moves a footprint-width, but
  * when it does jump we backfill points so the trail has no visible gaps.
+ *
+ * ~1.1 m at this latitude (`0.00001° × 111_320 m`). Halved from the legacy 2.2 m
+ * so the footprint is stamped twice as often — now that each footprint is a much
+ * smaller, realistic camera swath (see `COVERAGE_RADIUS_EXPRESSION`), the denser
+ * spacing keeps the smaller circles overlapping into a continuous trail instead
+ * of a dotted line.
  */
-export const COVERAGE_INTERPOLATION_STEP_DEGREES = 0.00002;
+export const COVERAGE_INTERPOLATION_STEP_DEGREES = 0.00001;
 /** Hard cap on interpolated points per segment, so a teleport can't flood the source. */
 export const COVERAGE_MAX_INTERPOLATED_POINTS = 160;
 
@@ -67,17 +73,27 @@ export const COVERAGE_MIN_MOVE_DEGREES = COVERAGE_INTERPOLATION_STEP_DEGREES;
 /**
  * Zoom → circle-radius (px) ramp. Scales the footprint with zoom so it covers a
  * roughly constant ground area, preventing holes from opening as the operator
- * zooms in. Copied verbatim from the legacy paint expression.
+ * zooms in (each +2 zoom levels quarters the m/px, so the px radius quadruples).
+ *
+ * Sized to a REALISTIC camera search footprint, not the legacy ~200 m blob.
+ * A low-altitude search drone (~0.5 m airframe) images a ground swath on the
+ * order of ~60 m across, i.e. a footprint radius ~30 m. At the default zoom 14
+ * (~7.9 m/px at this latitude) that is ≈4 px, so the ramp is anchored there and
+ * each footprint reads as the patch of ground a camera actually sees rather than
+ * a quarter-kilometre smear. This is ~6.5× smaller than the legacy ramp
+ * (10→2, 12→7, 14→26, 16→102, 18→408); paired with the denser stamp spacing
+ * above, the drones leave smaller, more frequent imprints that still build into
+ * a continuous heatmap.
  */
 const COVERAGE_RADIUS_EXPRESSION: unknown[] = [
   'interpolate',
   ['exponential', 2],
   ['zoom'],
-  10, 2,
-  12, 7,
-  14, 26,
-  16, 102,
-  18, 408,
+  10, 0.25,
+  12, 1,
+  14, 4,
+  16, 16,
+  18, 64,
 ];
 
 // ──────────────────────────────────────────────────────────────────────────
