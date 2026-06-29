@@ -114,7 +114,10 @@
 /* ── Layout grid ── */
 .shell-grid {
   display: grid;
-  grid-template-columns: 1.4fr 1fr 0.85fr;
+  /* Two columns now (was three): the wide tabbed main panel (VIDEO FOOTAGE /
+     LIVE MAP share one slot) and the fleet-status sidebar. The main column gets
+     the combined width the old video + map columns used (1.4 + 1 = 2.4fr). */
+  grid-template-columns: 2.4fr 0.85fr;
   /* The AI intel strip occupies the bottom row. It MUST stay a fixed,
      bounded height: its inner `.intel-stream` accumulates up to 50 log lines,
      and an `auto` row would grow to fit them all — turning the log into a wall
@@ -175,9 +178,76 @@
   overflow: hidden;
 }
 
+/* ── Tabbed main panel (VIDEO FOOTAGE / LIVE MAP) ── */
+/* The header bar becomes the tablist. The left group holds the two tab buttons;
+   the right `.count` keeps showing the active view's counter (feeds / coverage),
+   so the tab row replaces the old per-column headers without losing the stat. */
+.shell-tabs {
+  /* Keep the standard 30px head height (inherited) so the main panel body lines
+     up with the fleet panel beside it; the tab buttons just fill it edge to
+     edge. Only the right padding shrinks so the buttons sit flush on the left. */
+  padding: 0 8px 0 0;
+  gap: 8px;
+}
+.shell-tablist {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+}
+.shell-tab {
+  appearance: none;
+  height: 100%;
+  padding: 0 16px;
+  background: transparent;
+  border: none;
+  /* Active tab is marked by a glowing underline (see --active below). */
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.shell-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-panel-raised);
+}
+.shell-tab--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: var(--bg-panel-raised);
+  text-shadow: 0 0 8px var(--accent-glow);
+}
+.shell-tab:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ── Stacked views inside the main panel body ── */
+/* Both views overlay the body (which is `position: relative`); only the active
+   one shows. Absolute fill gives the map its containing block and lets the
+   video grid flex to full size, exactly as each did in its old column. */
+.shell-view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+/* Author rule beats the UA `[hidden] { display: none }` that `display: flex`
+   above would otherwise override — so toggling the `hidden` attribute (set by
+   DashboardShell on the inactive tab) actually hides the view. */
+.shell-view[hidden] {
+  display: none;
+}
+
 /* ── AI strip (full-width bottom row) ── */
 .shell-ai-strip {
-  grid-column: 1 / 4;
+  /* Spans both columns now that the grid is two-wide (was 1 / 4). */
+  grid-column: 1 / 3;
   background: var(--bg-panel-raised);
   border-top: 2px solid var(--accent);
   min-height: 78px;
