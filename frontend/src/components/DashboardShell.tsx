@@ -14,14 +14,25 @@
  *   - `intel`      → Task C3    (IntelPanel.tsx — AI intel strip)
  *   - header slots → Module D  (deploy controls, conn status, mission clock)
  *
+ * The `videoFeeds` and `map` slots no longer sit side-by-side: they share ONE
+ * wide panel and the operator switches between them with the VIDEO FOOTAGE /
+ * LIVE MAP tabs. Both views stay mounted (the inactive one is CSS-hidden, not
+ * unmounted) so the Mapbox canvas keeps its camera/draw/coverage state and the
+ * video keeps streaming across a tab switch — TacticalMap resizes itself when it
+ * becomes visible again (see its ResizeObserver).
+ *
  * The component holds NO telemetry state and imports nothing from the store or
- * network layers — it stays a "pure layout grid component" per the Module C
- * interface contract, so it can be built and reviewed independently of A/B/D.
+ * network layers. The only state it owns is the purely-presentational active-tab
+ * selector, so it stays a "layout grid component" per the Module C interface
+ * contract and can be built and reviewed independently of A/B/D.
  */
 
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import '../styles/theme.css';
 import './DashboardShell.css';
+
+/** Which view the main panel is showing. */
+type MainView = 'video' | 'map';
 
 interface PlaceholderProps {
   label: string;
@@ -48,16 +59,16 @@ export interface DashboardShellProps {
   /** Mission clock readout, far right of the header. */
   missionClock?: ReactNode;
 
-  /* ── Panel header counters ── */
-  /** "N/6 ONLINE" badge in the LIVE FEEDS panel header. */
+  /* ── Main-panel header counter (tracks the active tab) ── */
+  /** "N/6 ONLINE" badge, shown in the tab header while the VIDEO FOOTAGE tab is active. */
   feedCount?: ReactNode;
-  /** "N% SEARCHED" badge in the POSITION // GPS panel header. */
+  /** "N% SEARCHED" badge, shown in the tab header while the LIVE MAP tab is active. */
   coverage?: ReactNode;
 
   /* ── Panel body slots ── */
-  /** Streaming video grid (Task C2). */
+  /** Streaming video grid (Task C2) — the VIDEO FOOTAGE tab. */
   videoFeeds?: ReactNode;
-  /** Geospatial map frame (Module B). */
+  /** Geospatial map frame (Module B) — the LIVE MAP tab. */
   map?: ReactNode;
   /** Fleet status / mission summary sidebar (right column). */
   sidebar?: ReactNode;
@@ -80,6 +91,10 @@ export default function DashboardShell({
   sidebar,
   intel,
 }: DashboardShellProps) {
+  // Active tab for the shared main panel. Defaults to the video footage, the
+  // first-listed tab. Switching only flips a CSS class — neither view unmounts.
+  const [view, setView] = useState<MainView>('video');
+
   return (
     <div className="shell-root">
       {/* Single top banner — the swarm control panel. Brand, connection status,
@@ -126,29 +141,65 @@ export default function DashboardShell({
       </header>
 
       <main className="shell-grid">
-        {/* Column 1 — live video feeds. */}
-        <section className="shell-panel">
-          <div className="shell-panel-head">
-            <span>LIVE FEEDS</span>
-            <span className="count">{feedCount ?? '0/6 ONLINE'}</span>
+        {/* Column 1 — the shared main panel: VIDEO FOOTAGE / LIVE MAP tabs. The
+            header doubles as the tablist; the counter on the right tracks the
+            active view (feeds online for video, coverage for the map). */}
+        <section className="shell-panel shell-panel--main">
+          <div className="shell-panel-head shell-tabs">
+            <div className="shell-tablist" role="tablist" aria-label="Main view">
+              <button
+                type="button"
+                role="tab"
+                id="tab-video"
+                aria-selected={view === 'video'}
+                aria-controls="view-video"
+                className={`shell-tab${view === 'video' ? ' shell-tab--active' : ''}`}
+                onClick={() => setView('video')}
+              >
+                VIDEO FOOTAGE
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="tab-map"
+                aria-selected={view === 'map'}
+                aria-controls="view-map"
+                className={`shell-tab${view === 'map' ? ' shell-tab--active' : ''}`}
+                onClick={() => setView('map')}
+              >
+                LIVE MAP
+              </button>
+            </div>
+            <span className="count">
+              {view === 'video' ? (feedCount ?? '0/6 ONLINE') : (coverage ?? 'COVERAGE 0%')}
+            </span>
           </div>
+
+          {/* Both views stay mounted; only the active one is shown so the map
+              and the video stream keep their state across a tab switch. */}
           <div className="shell-panel-body">
-            {videoFeeds ?? <Placeholder label="Video Feeds" hint="Task C2 · VideoGrid" />}
+            <div
+              id="view-video"
+              role="tabpanel"
+              aria-labelledby="tab-video"
+              hidden={view !== 'video'}
+              className="shell-view"
+            >
+              {videoFeeds ?? <Placeholder label="Video Feeds" hint="Task C2 · VideoGrid" />}
+            </div>
+            <div
+              id="view-map"
+              role="tabpanel"
+              aria-labelledby="tab-map"
+              hidden={view !== 'map'}
+              className="shell-view"
+            >
+              {map ?? <Placeholder label="Map Frame" hint="Module B · TacticalMap" />}
+            </div>
           </div>
         </section>
 
-        {/* Column 2 — geospatial map. */}
-        <section className="shell-panel">
-          <div className="shell-panel-head">
-            <span>POSITION // GPS</span>
-            <span className="count">{coverage ?? 'COVERAGE 0%'}</span>
-          </div>
-          <div className="shell-panel-body">
-            {map ?? <Placeholder label="Map Frame" hint="Module B · TacticalMap" />}
-          </div>
-        </section>
-
-        {/* Column 3 — fleet status / mission summary sidebar. */}
+        {/* Column 2 — fleet status / mission summary sidebar. */}
         <section className="shell-panel">
           <div className="shell-panel-head">
             <span>FLEET STATUS</span>
