@@ -280,6 +280,23 @@ export function TacticalMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Keep the Mapbox canvas correctly sized when its CONTAINER changes size — not
+  // just the window. The map now lives behind a tab (DashboardShell's LIVE MAP
+  // view): while the VIDEO FOOTAGE tab is active the map's container is
+  // `hidden` (0×0), and Mapbox's built-in `trackResize` only listens to window
+  // resizes, so without this the canvas would stay collapsed until the next
+  // window resize. A ResizeObserver fires when the container goes hidden→visible
+  // (and on any panel/window resize), repainting at the right size. Guarded for
+  // jsdom/older environments where ResizeObserver is undefined (tests, SSR).
+  useEffect(() => {
+    if (!map || typeof ResizeObserver === 'undefined') return;
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => map.resize());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [map]);
+
   const livePositions = positions ?? NO_POSITIONS;
   const liveCoverage = coveragePositions ?? NO_COVERAGE;
 
