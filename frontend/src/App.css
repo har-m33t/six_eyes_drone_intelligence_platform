@@ -25,10 +25,16 @@
 }
 
 /* ── Fleet-status sidebar ── */
+/* `.fleet` mounts directly into `.shell-panel-body`, which is a flex ROW. Without
+   `flex: 1` it would size to its content width along the main axis and leave the
+   right of the panel empty; `flex: 1` + `min-width: 0` make it fill the full
+   width it's been given (height is handled by the stretch + `height: 100%`). */
 .fleet {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  flex: 1;
+  min-width: 0;
   height: 100%;
 }
 
