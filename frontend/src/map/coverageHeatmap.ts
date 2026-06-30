@@ -75,25 +75,28 @@ export const COVERAGE_MIN_MOVE_DEGREES = COVERAGE_INTERPOLATION_STEP_DEGREES;
  * roughly constant ground area, preventing holes from opening as the operator
  * zooms in (each +2 zoom levels quarters the m/px, so the px radius quadruples).
  *
- * Sized to a REALISTIC camera search footprint, not the legacy ~200 m blob.
- * A low-altitude search drone (~0.5 m airframe) images a ground swath on the
- * order of ~60 m across, i.e. a footprint radius ~30 m. At the default zoom 14
- * (~7.9 m/px at this latitude) that is ≈4 px, so the ramp is anchored there and
- * each footprint reads as the patch of ground a camera actually sees rather than
- * a quarter-kilometre smear. This is ~6.5× smaller than the legacy ramp
- * (10→2, 12→7, 14→26, 16→102, 18→408); paired with the denser stamp spacing
- * above, the drones leave smaller, more frequent imprints that still build into
- * a continuous heatmap.
+ * Sized so the footprint trail fills SOLID across the search area — when the
+ * coverage stat reads 100% (every lawnmower waypoint flown) the purple should
+ * leave no gaps between adjacent sweep lanes. The lanes are spaced one
+ * `DEFAULT_GEO_SWEEP_SPACING` apart (≈0.0002° ≈ 22 m), so each footprint must be
+ * wide enough to bridge that gap from both sides. At the default zoom 14
+ * (~7.9 m/px at this latitude) the anchor of 8 px ≈ 63 m ground radius — ~2.8×
+ * the lane spacing, so neighbouring passes overlap into a continuous fill even
+ * after `circle-blur` feathers the outer edge. That is a deliberate, moderate
+ * bump (2× the previous ~30 m camera-swath sizing) that closes the inter-lane
+ * holes while staying well under the legacy ~205 m blob (10→2, 12→7, 14→26,
+ * 16→102, 18→408) — it reads as a filled search footprint, not an overblown
+ * smear, and only spills ~50 m past the drawn perimeter.
  */
 const COVERAGE_RADIUS_EXPRESSION: unknown[] = [
   'interpolate',
   ['exponential', 2],
   ['zoom'],
-  10, 0.25,
-  12, 1,
-  14, 4,
-  16, 16,
-  18, 64,
+  10, 0.5,
+  12, 2,
+  14, 8,
+  16, 32,
+  18, 128,
 ];
 
 // ──────────────────────────────────────────────────────────────────────────
