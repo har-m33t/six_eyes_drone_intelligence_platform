@@ -62,6 +62,28 @@ export function frameToImageSrc(frame: string | null | undefined): string | null
   return DATA_IMAGE_B64_RE.test(value) ? value : `data:image/jpeg;base64,${value}`;
 }
 
+/**
+ * Battery level → severity colour for the live battery bar, mirroring the fleet
+ * panel's `statusColor` convention (accent = healthy, amber = warning, red =
+ * critical). The <10% threshold lines up with the demo battery-critical alert.
+ */
+export function batteryColor(battery: number): string {
+  if (battery <= 10) return 'var(--red, #ff5c5c)';
+  if (battery <= 30) return 'var(--amber, #ffb84d)';
+  return 'var(--accent, #a78bfa)';
+}
+
+/**
+ * Compact hemisphere-tagged coordinate readout for the corner GPS overlay, e.g.
+ * `34.0522°N 118.2437°W`. Four decimals ≈ 11 m precision — enough for the demo
+ * while keeping the chip narrow so it never crowds the frame.
+ */
+export function formatGps(lat: number, lng: number): string {
+  const fmt = (v: number, pos: string, neg: string) =>
+    `${Math.abs(v).toFixed(4)}°${v >= 0 ? pos : neg}`;
+  return `${fmt(lat, 'N', 'S')} ${fmt(lng, 'E', 'W')}`;
+}
+
 export interface VideoFeedProps {
   droneId: DroneId;
   zone: Zone;
@@ -71,6 +93,17 @@ export interface VideoFeedProps {
   frame?: string | null;
   /** YOLO person detections for the current frame; drives the overlay + badge. */
   detections?: Detection[];
+  /**
+   * Live battery percentage `[0, 100]` from `health.battery`. Drives the battery
+   * bar, which only mounts once the feed is LIVE (connected + streaming), so it
+   * "appears upon connection" and disappears again if the drone drops offline.
+   */
+  battery?: number;
+  /**
+   * Live GPS fix (`gps.lat` / `gps.lng`) shown as a small corner overlay over the
+   * footage. Like the battery bar it only renders while the feed is LIVE.
+   */
+  gps?: { lat: number; lng: number };
 }
 
 interface FrameSize {
@@ -84,6 +117,8 @@ export function VideoFeed({
   status,
   frame,
   detections = [],
+  battery,
+  gps,
 }: VideoFeedProps) {
   // Native pixel dimensions of the streamed frame, captured on first decode.
   // The YOLO bboxes are in this same pixel space, so the overlay's SVG viewBox
@@ -101,6 +136,17 @@ export function VideoFeed({
   const showPlaceholder = !showImage && status === 'NO_SIGNAL';
   const hasDetections = detections.length > 0;
   const showOverlay = status === 'LIVE' && hasFrame && hasDetections && frameSize !== null;
+  // The battery bar only appears once the feed is LIVE (connected + streaming),
+  // so it materialises on connection and is torn down again if the link is lost.
+  const showBattery = status === 'LIVE' && typeof battery === 'number' && Number.isFinite(battery);
+  const batteryPct = showBattery ? Math.max(0, Math.min(100, battery as number)) : 0;
+  // GPS overlay follows the same connection gate as the battery bar: only over a
+  // LIVE frame, and only when both coordinates are real numbers.
+  const showGps =
+    status === 'LIVE' &&
+    gps != null &&
+    Number.isFinite(gps.lat) &&
+    Number.isFinite(gps.lng);
 
   return (
     <div className={`feed${isOffline ? ' offline' : ''}`} data-drone-id={droneId}>
@@ -146,9 +192,43 @@ export function VideoFeed({
         <span className="zone">{zone}</span>
       </div>
 
+      {showGps && gps && (
+        // Small telemetry chip tucked in the top-right corner, below the zone
+        // label — clear of the battery bar and detect badge so it never blocks
+        // the video subject. Updates every tick as the GPS fix changes.
+        <div className="feed-gps" aria-label={`${shortDroneLabel(droneId)} GPS coordinates`}>
+          <span className="feed-gps-label">GPS</span>
+          {formatGps(gps.lat, gps.lng)}
+        </div>
+      )}
+
       {status === 'LIVE' && hasDetections && (
         <div className="feed-detect-badge">
           PERSON DETECTED{detections.length > 1 ? ` ×${detections.length}` : ''}
+        </div>
+      )}
+
+      {showBattery && (
+        // Live battery gauge pinned to the bottom of the tile. `role="meter"`
+        // exposes the live value to assistive tech; the fill width + colour track
+        // the draining battery and re-render every telemetry tick with the frame.
+        <div
+          className="feed-battery"
+          role="meter"
+          aria-label={`${shortDroneLabel(droneId)} battery`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(batteryPct)}
+        >
+          <div className="feed-battery-track">
+            <div
+              className="feed-battery-fill"
+              style={{ width: `${batteryPct}%`, background: batteryColor(batteryPct) }}
+            />
+          </div>
+          <span className="feed-battery-pct" style={{ color: batteryColor(batteryPct) }}>
+            {Math.round(batteryPct)}%
+          </span>
         </div>
       )}
     </div>
