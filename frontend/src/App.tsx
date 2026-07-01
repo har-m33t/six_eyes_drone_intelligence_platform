@@ -100,6 +100,7 @@ function buildFeeds(
       signal: pkt.health?.signal,
       frame: typeof pkt.frame_b64 === 'string' ? pkt.frame_b64 : null,
       detections: pkt.detections,
+      battery: pkt.health?.battery,
     };
   }
   return feeds;
