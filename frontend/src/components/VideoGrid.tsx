@@ -25,6 +25,10 @@ export interface DroneFeedData {
   frame?: string | null;
   /** YOLO person detections for the latest frame. */
   detections?: Detection[];
+  /** Live battery percentage `[0, 100]`; drives the per-tile battery bar. */
+  battery?: number;
+  /** Live GPS fix `{ lat, lng }`; drives the per-tile corner coordinate overlay. */
+  gps?: { lat: number; lng: number };
 }
 
 export interface VideoGridProps {
@@ -46,6 +50,8 @@ export function VideoGrid({ feeds }: VideoGridProps) {
             status={status}
             frame={data?.frame}
             detections={data?.detections}
+            battery={data?.battery}
+            gps={data?.gps}
           />
         );
       })}
