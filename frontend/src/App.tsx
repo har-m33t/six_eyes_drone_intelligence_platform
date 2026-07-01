@@ -96,11 +96,14 @@ function buildFeeds(
   for (const id of DRONE_IDS) {
     const pkt = drones[id];
     if (!pkt) continue;
+    const gps = pkt.gps;
     feeds[id] = {
       signal: pkt.health?.signal,
       frame: typeof pkt.frame_b64 === 'string' ? pkt.frame_b64 : null,
       detections: pkt.detections,
       battery: pkt.health?.battery,
+      // `lng` is canonical; fall back to the `lon` alias older producers send.
+      gps: gps ? { lat: gps.lat, lng: gps.lng ?? gps.lon } : undefined,
     };
   }
   return feeds;
