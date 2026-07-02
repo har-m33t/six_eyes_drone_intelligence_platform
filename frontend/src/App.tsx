@@ -21,6 +21,7 @@ import DashboardShell from './components/DashboardShell';
 import { TacticalMap } from './components/TacticalMap';
 import { VideoGrid, countOnlineFeeds, type DroneFeedData } from './components/VideoGrid';
 import { ConnectedIntelPanel } from './components/IntelPanel';
+import { TelemetryTrends } from './components/TelemetryTrends';
 import DeployControls from './components/DeployControls';
 import { useDeploySwarm } from './controllers/useDeploySwarm';
 import { useKeyboardControls } from './hooks/useKeyboardControls';
@@ -222,6 +223,10 @@ function ConnectedSidebar() {
           );
         })}
       </div>
+
+      {/* Live mission-trend charts fill the empty space under the fleet rows:
+          fleet-mean battery decline + per-drone connection strength. */}
+      <TelemetryTrends />
     </div>
   );
 }
