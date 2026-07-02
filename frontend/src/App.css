@@ -68,6 +68,9 @@
   flex-direction: column;
   gap: 1px;
   overflow-y: auto;
+  /* Keep all six rows at full height; the trend charts below take (and shrink
+     into) whatever vertical space is left over. */
+  flex-shrink: 0;
 }
 .fleet-row {
   display: grid;
