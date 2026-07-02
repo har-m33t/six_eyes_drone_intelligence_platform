@@ -1,0 +1,138 @@
+/*
+ * TelemetryTrends — live sidebar trend charts (avg battery + connection
+ * strength). Uses only theme.css tokens so it stays on-palette with the rest of
+ * the fleet-status column. Mounts into the empty space below the fleet rows and
+ * flexes to fill it; the two charts split the available height evenly.
+ */
+
+.trends {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  /* Take the leftover sidebar height under the fleet rows; can shrink on short
+     viewports (charts keep a min-height, the container clips rather than
+     overflowing the panel). */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  /* A hairline divider sets the trends apart from the drone rows above. */
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.trend {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.trend-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+.trend-title {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.trend-current {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ── Chart plot area ── */
+/* `position: relative` anchors the absolutely-filled SVG and the HTML axis
+   ticks. `min-height` keeps the plot usable when the sidebar is short. */
+.trend-chart {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 54px;
+  width: 100%;
+  background: var(--bg-void);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.trend-chart-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.trend-grid {
+  stroke: var(--line-bright);
+  stroke-width: 1px;
+  stroke-dasharray: 2 3;
+  opacity: 0.6;
+}
+.trend-line {
+  fill: none;
+  stroke-width: 1.6px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.trend-area {
+  fill-opacity: 0.14;
+  stroke: none;
+}
+
+/* ── Right-edge axis ticks (HTML overlay, never scaled) ── */
+.trend-axis {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.trend-axis-tick {
+  position: absolute;
+  right: 3px;
+  /* Vertical anchor is set inline per-tick (proportional to position) so the
+     top/bottom labels stay inside the plot instead of being clipped. */
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--bg-void) 70%, transparent);
+  padding: 0 2px;
+  border-radius: 1px;
+}
+
+/* ── Connection-strength legend ── */
+.trend-legend {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px 8px;
+  flex-shrink: 0;
+}
+.trend-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: 9px;
+}
+.trend-legend-swatch {
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  flex-shrink: 0;
+}
+.trend-legend-id {
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+.trend-legend-state {
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
